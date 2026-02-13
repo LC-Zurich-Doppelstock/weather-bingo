@@ -28,15 +28,16 @@ RUN npm run build
 # ==============================================================
 FROM nginx:alpine AS production
 
-# Default API_URL (override on Railway via env var)
+# Defaults (override on Railway via env vars)
 ENV API_URL=http://localhost:8080
+ENV PORT=80
 
 COPY --from=build /app/dist /usr/share/nginx/html
 # Place template outside /etc/nginx/templates/ to prevent nginx's
 # automatic envsubst (which replaces ALL $vars, clobbering $host etc.)
 COPY frontend/nginx.conf.template /etc/nginx/nginx.conf.template
 
-# Substitute only $API_URL, then start nginx
-CMD ["/bin/sh", "-c", "envsubst '${API_URL}' < /etc/nginx/nginx.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]
+# Substitute only $API_URL and $PORT, then start nginx
+CMD ["/bin/sh", "-c", "envsubst '${API_URL} ${PORT}' < /etc/nginx/nginx.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]
 
 EXPOSE 80
