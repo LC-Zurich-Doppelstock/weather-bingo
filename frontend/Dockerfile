@@ -40,6 +40,6 @@ COPY frontend/nginx.conf.template /etc/nginx/nginx.conf.template
 # Substitute $API_URL, $PORT, and $NAMESERVER, then start nginx.
 # NAMESERVER is extracted from the container's /etc/resolv.conf.
 # IPv6 addresses are wrapped in brackets for nginx compatibility.
-CMD ["/bin/sh", "-c", "export NAMESERVER=$(awk '/^nameserver/{ip=$2; if(index(ip,\":\")){ip=\"[\"ip\"]\"}; printf \"%s \",ip}' /etc/resolv.conf) && echo \"DEBUG: PORT=$PORT API_URL=$API_URL NAMESERVER=$NAMESERVER\" && envsubst '${API_URL} ${PORT} ${NAMESERVER}' < /etc/nginx/nginx.conf.template > /etc/nginx/conf.d/default.conf && cat /etc/nginx/conf.d/default.conf && echo '--- starting nginx ---' && nginx -g 'daemon off;'"]
+CMD ["/bin/sh", "-c", "export NAMESERVER=$(awk '/^nameserver/{ip=$2; if(index(ip,\":\")){ip=\"[\"ip\"]\"}; printf \"%s \",ip}' /etc/resolv.conf) && envsubst '${API_URL} ${PORT} ${NAMESERVER}' < /etc/nginx/nginx.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]
 
 EXPOSE 80
