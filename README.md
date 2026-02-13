@@ -39,7 +39,7 @@ Frontend (React/TS)  →  REST API (Rust/Axum)  →  PostgreSQL
 
 Currently: **Vasaloppet 2026** (90 km, Berga/Sälen → Mora, March 1st 08:00 CET)
 
-Race course and checkpoint data stored in `data/vasaloppet-2026.gpx`.
+Race course and checkpoint data stored in `data/vasaloppet-2026.gpx` using a custom `wb:` XML namespace for race metadata. The GPX file is the single source of truth -- the API parses it at startup and upserts races + checkpoints into the database (idempotent).
 
 ## Getting Started
 
@@ -51,7 +51,8 @@ docker compose up
 |---------|-----|
 | Frontend | http://localhost:3000 |
 | API | http://localhost:8080 |
-| PostgreSQL | localhost:5432 |
+| Swagger UI | http://localhost:8080/swagger-ui/ |
+| PostgreSQL | localhost:5431 |
 
 ## Project Structure
 

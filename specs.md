@@ -34,6 +34,7 @@ The app stores both current and historical forecasts, allowing users to observe 
 | ---------- | ------------------ | -------------------------------------------------- |
 | Frontend   | TypeScript (React) | Interactive map, charts, race/weather visualisation |
 | API        | Rust (Axum)        | REST endpoints, forecast fetching, caching logic    |
+| API Docs   | utoipa + Swagger UI | Interactive OpenAPI documentation at `/swagger-ui/` |
 | Database   | PostgreSQL         | Stores races, checkpoints, forecasts (current + historic) |
 | Weather    | yr.no (MET Norway) | External weather data source                       |
 | Dev Infra  | Docker Compose     | Local development environment                      |
@@ -117,8 +118,10 @@ Table: forecasts
 
 > **Note:** Each forecast fetch from yr.no creates a new row. The `fetched_at` column distinguishes the latest forecast from historical ones for the same `checkpoint_id` + `forecast_time`.
 
-### 3.4 Indexes
+### 3.4 Indexes & Constraints
 
+- `UNIQUE (name, year)` on `races` — enables idempotent upsert during GPX seeding
+- `UNIQUE (race_id, sort_order)` on `checkpoints` — enables idempotent upsert during GPX seeding
 - `forecasts(checkpoint_id, forecast_time, fetched_at DESC)` — fast lookup of latest forecast per checkpoint/time
 - `forecasts(checkpoint_id, fetched_at)` — historical forecast queries
 - `checkpoints(race_id, sort_order)` — ordered checkpoint retrieval
@@ -177,9 +180,19 @@ When a forecast is requested:
 
 ### 4.3 Forecast Freshness
 
-- The API checks for new forecast data from yr.no when serving a request if the most recent `fetched_at` for that location is older than **1 minute**.
+- The API checks for new forecast data from yr.no when serving a request if the most recent `fetched_at` for that location is older than the configured staleness threshold (default: **60 seconds**, configurable via `FORECAST_STALENESS_SECS`).
 - yr.no's `Expires` / `Last-Modified` headers should be respected to avoid unnecessary calls.
 - yr.no API usage must comply with their [Terms of Service](https://api.met.no/doc/TermsOfService) (identify via `User-Agent` header).
+
+### 4.3.1 Configuration (Environment Variables)
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DATABASE_URL` | Yes | — | PostgreSQL connection string |
+| `YR_USER_AGENT` | No | `WeatherBingo/0.1 github.com/LC-Zurich-Doppelstock/weather-bingo` | User-Agent for yr.no API requests |
+| `PORT` | No | `8080` | HTTP server listen port |
+| `FORECAST_STALENESS_SECS` | No | `60` | Seconds before a cached forecast is considered stale |
+| `DATA_DIR` | No | `./data` | Directory containing GPX files for race seeding at startup |
 
 ### 4.4 yr.no Integration
 
@@ -226,6 +239,17 @@ yr.no provides historical Nordic forecast model data in NetCDF format via their 
 | Invalid race/checkpoint ID   | 404         | Standard not-found response                      |
 | Invalid query parameters     | 400         | Validation error details                         |
 
+### 4.6 API Documentation (OpenAPI / Swagger)
+
+The API automatically generates an OpenAPI 3.0 specification using `utoipa` and serves interactive documentation via `utoipa-swagger-ui`:
+
+| Path | Description |
+|------|-------------|
+| `/swagger-ui/` | Interactive Swagger UI |
+| `/api-docs/openapi.json` | OpenAPI JSON specification |
+
+All route handlers, request parameters, and response types are annotated with `utoipa::ToSchema` and `utoipa::path` macros for automatic documentation.
+
 ---
 
 ## 5. Frontend (TypeScript / React)
@@ -239,7 +263,7 @@ yr.no provides historical Nordic forecast model data in NetCDF format via their 
 | Map             | Leaflet + React-Leaflet (OpenStreetMap) |
 | Charts          | Recharts (lightweight, responsive) |
 | HTTP client     | Fetch API / TanStack Query         |
-| Styling         | Tailwind CSS                       |
+| Styling         | Tailwind CSS v4 (`@tailwindcss/vite` plugin, `@theme` in CSS) |
 | Testing         | Vitest + React Testing Library     |
 | Responsive      | Mobile-first with Tailwind breakpoints |
 
@@ -420,7 +444,8 @@ Uncertainty ranges (percentile bands) are rendered as the same colour at **15% o
 
 ### 6.3 Test Conventions
 
-- Tests live alongside source files: `foo.ts` → `foo.test.ts`, `foo.rs` → `#[cfg(test)] mod tests` or `tests/foo.rs`.
+- Tests live alongside source files: `foo.ts` → `foo.test.ts`, `foo.rs` → `#[cfg(test)] mod tests`.
+- Vitest is configured inline in `vite.config.ts` (no separate `vitest.config.ts`), using `jsdom` environment and a global setup file at `src/test-setup.ts` (loads `@testing-library/jest-dom` matchers and polyfills like `ResizeObserver`).
 - CI should run all tests before merge (to be set up later).
 - Minimum coverage target: **80%** for business logic.
 
@@ -428,9 +453,69 @@ Uncertainty ranges (percentile bands) are rendered as the same colour at **15% o
 
 ## 7. Seed Data
 
-Race and checkpoint data for initial development is stored in `data/vasaloppet-2026.gpx` (GPX with waypoints for checkpoints and a full course track). Coordinates sourced from the [official track profile on Wikipedia](https://en.wikipedia.org/wiki/Vasaloppet#Track_profile).
+Race and checkpoint data is stored in GPX files under `data/`. The GPX file is the **single source of truth** for race metadata and checkpoint positions.
 
-The API should seed the database from this file on first startup (or via a migration/seed script).
+### 7.1 GPX Format
+
+GPX files use standard GPX 1.1 with a custom `wb:` XML namespace for Weather Bingo extensions:
+
+```xml
+<gpx xmlns="http://www.topografix.com/GPX/1/1"
+     xmlns:wb="https://github.com/LC-Zurich-Doppelstock/weather-bingo/gpx"
+     version="1.1" creator="WeatherBingo">
+  <metadata>
+    <name>Vasaloppet</name>           <!-- Race name -->
+    <extensions>
+      <wb:race>
+        <wb:year>2026</wb:year>
+        <wb:start_time>2026-03-01T08:00:00+01:00</wb:start_time>
+        <wb:distance_km>90</wb:distance_km>
+      </wb:race>
+    </extensions>
+  </metadata>
+
+  <!-- Checkpoints: waypoints with <type>checkpoint</type> -->
+  <wpt lat="61.1056" lon="13.3042">
+    <ele>350</ele>
+    <name>Berga (Start)</name>
+    <type>checkpoint</type>
+    <extensions>
+      <wb:distance_km>0</wb:distance_km>
+    </extensions>
+  </wpt>
+  <!-- ... more waypoints ... -->
+
+  <!-- Full course track for map rendering -->
+  <trk>
+    <name>Vasaloppet</name>
+    <trkseg>
+      <trkpt lat="..." lon="..."><ele>...</ele></trkpt>
+      <!-- ... -->
+    </trkseg>
+  </trk>
+</gpx>
+```
+
+Key conventions:
+- Race metadata lives in `<metadata><extensions><wb:race>` (year, start_time, distance_km).
+- Checkpoints are `<wpt>` elements with `<type>checkpoint</type>`. Non-checkpoint waypoints (e.g. `<type>poi</type>`) are ignored.
+- Each checkpoint must have `<wb:distance_km>` in its extensions.
+- The `<trk>` element provides the full course geometry for map rendering.
+
+### 7.2 Startup Seeding
+
+On startup (after running database migrations), the API:
+
+1. Scans `DATA_DIR` (default `./data`) for `*.gpx` files.
+2. Parses each file using the `services::gpx` module.
+3. Upserts each race and its checkpoints into the database using `INSERT ... ON CONFLICT`:
+   - Races are matched by `(name, year)`.
+   - Checkpoints are matched by `(race_id, sort_order)`.
+4. This is **idempotent** — re-running on the same data is a no-op.
+
+### 7.3 Current Data
+
+- **`data/vasaloppet-2026.gpx`** — Vasaloppet 2026 (90 km, Berga/Sälen to Mora, 9 checkpoints). Coordinates sourced from the [official track profile on Wikipedia](https://en.wikipedia.org/wiki/Vasaloppet#Track_profile).
 
 ---
 
@@ -442,13 +527,18 @@ The API should seed the database from this file on first startup (or via a migra
 services:
   db:
     image: postgres:16-alpine
-    ports: ["5432:5432"]
+    ports: ["5431:5432"]
     environment:
       POSTGRES_DB: weather_bingo
       POSTGRES_USER: wb
       POSTGRES_PASSWORD: wb_dev
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wb -d weather_bingo"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   api:
     build: ./api
@@ -456,16 +546,27 @@ services:
     environment:
       DATABASE_URL: postgres://wb:wb_dev@db:5432/weather_bingo
       YR_USER_AGENT: "WeatherBingo/0.1 github.com/LC-Zurich-Doppelstock/weather-bingo"
-    depends_on: [db]
+      PORT: "8080"
+      DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data:ro
+    depends_on:
+      db:
+        condition: service_healthy
 
   frontend:
     build: ./frontend
     ports: ["3000:3000"]
-    depends_on: [api]
+    environment:
+      VITE_API_URL: http://api:8080
+    depends_on:
+      - api
 
 volumes:
   pgdata:
 ```
+
+> **Note:** The DB host port is `5431` (not `5432`) to avoid conflicts with a local PostgreSQL instance. Inside the Docker network, containers connect on the standard port `5432`.
 
 ### 8.2 Project Structure
 
@@ -480,7 +581,7 @@ weather-bingo/
 │   │   ├── db/
 │   │   │   ├── mod.rs
 │   │   │   ├── models.rs       # DB models (Race, Checkpoint, Forecast)
-│   │   │   └── queries.rs      # SQL queries
+│   │   │   └── queries.rs      # SQL queries (incl. upsert for GPX seeding)
 │   │   ├── routes/
 │   │   │   ├── mod.rs
 │   │   │   ├── races.rs        # Race endpoints
@@ -489,20 +590,22 @@ weather-bingo/
 │   │   ├── services/
 │   │   │   ├── mod.rs
 │   │   │   ├── forecast.rs     # Forecast resolution logic
+│   │   │   ├── gpx.rs          # GPX parser (wb: namespace extensions)
 │   │   │   └── yr.rs           # yr.no API client
 │   │   └── errors.rs           # Error types
-│   ├── migrations/             # SQL migrations (sqlx)
-│   └── tests/                  # Integration tests
+│   └── migrations/             # SQL migrations (sqlx)
 │
 ├── frontend/                   # React + TypeScript
 │   ├── package.json
 │   ├── Dockerfile
-│   ├── vite.config.ts
-│   ├── tailwind.config.ts
+│   ├── vite.config.ts          # Vite + Vitest config (inline test block)
 │   ├── tsconfig.json
 │   ├── src/
 │   │   ├── main.tsx
 │   │   ├── App.tsx
+│   │   ├── index.css           # Tailwind v4 + @theme colour tokens
+│   │   ├── test-setup.ts       # Vitest global setup (jest-dom, polyfills)
+│   │   ├── vite-env.d.ts
 │   │   ├── api/                # API client & types
 │   │   │   ├── client.ts
 │   │   │   └── types.ts
@@ -519,9 +622,10 @@ weather-bingo/
 │   │   │   ├── Controls/
 │   │   │   │   ├── RaceSelector.tsx
 │   │   │   │   └── TargetTimeInput.tsx
-│   │   │   └── Layout/
-│   │   │       ├── Header.tsx
-│   │   │       └── Footer.tsx
+│   │   │   ├── Layout/
+│   │   │   │   ├── Header.tsx
+│   │   │   │   └── Footer.tsx
+│   │   │   └── ErrorBoundary.tsx
 │   │   ├── hooks/              # Custom React hooks
 │   │   │   ├── useRace.ts
 │   │   │   ├── useForecast.ts
@@ -530,10 +634,13 @@ weather-bingo/
 │   │   │   ├── pacing.ts
 │   │   │   └── formatting.ts
 │   │   └── styles/
-│   │       └── theme.ts        # Colour palette from reference image
+│   │       └── theme.ts        # Colour palette constants
 │   └── public/
 │
+├── data/                       # Race GPX files (seed data)
+│   └── vasaloppet-2026.gpx
 ├── docker-compose.yml
+├── AGENTS.md
 ├── README.md
 └── specs.md
 ```
@@ -658,13 +765,18 @@ weather-bingo/
   "checkpoints": [
     {
       "checkpoint_id": "uuid",
-      "name": "Sälen (Start)",
+      "name": "Berga (Start)",
       "distance_km": 0,
       "expected_time": "2026-03-01T08:00:00+01:00",
       "weather": {
         "temperature_c": -5.0,
+        "temperature_percentile_10_c": -7.0,
+        "temperature_percentile_90_c": -3.0,
         "feels_like_c": -10.0,
         "wind_speed_ms": 2.1,
+        "wind_speed_percentile_10_ms": 1.2,
+        "wind_speed_percentile_90_ms": 3.5,
+        "wind_direction_deg": 315,
         "precipitation_mm": 0.2,
         "precipitation_type": "snow",
         "symbol_code": "lightsnow"
@@ -672,7 +784,7 @@ weather-bingo/
     },
     {
       "checkpoint_id": "uuid",
-      "name": "Smågan",
+      "name": "Sm\u00e5gan",
       "distance_km": 11,
       "expected_time": "2026-03-01T09:58:00+01:00",
       "weather": { "..." : "..." }
@@ -681,7 +793,7 @@ weather-bingo/
 }
 ```
 
-> **Note:** The race-level endpoint returns a simplified weather object (no uncertainty ranges) to keep responses compact.
+> **Note:** The race-level endpoint includes uncertainty ranges (p10/p90 for temperature and wind) to support the CourseOverview shaded band charts. Percentile fields are nullable — they may be absent for long-range forecasts.
 
 ---
 
@@ -732,8 +844,11 @@ A future improvement will adjust pacing based on elevation profile from GPX data
 
 | #  | Item                                     | Status      |
 | -- | ---------------------------------------- | ----------- |
-| 1  | Colour scheme derived from tropical botanical artwork    | ✅ Done |
-| 2  | GPX mock track created at `data/vasaloppet-2026.gpx` using Wikipedia coordinates + interpolated waypoints. Replace with official GPX when available. | ✅ Done (mock) |
-| 3  | Checkpoint coordinates sourced from Wikipedia track profile. Verify against official race data when available. | ✅ Done (mock) |
-| 4  | Historical weather data source: yr.no thredds server (NetCDF, Nordic region) | ✅ Done |
-| 5  | yr.no API review: feels-like must be calculated, uncertainty via percentiles, precip type inferred from symbol_code | ✅ Done |
+| 1  | Colour scheme derived from tropical botanical artwork    | Done |
+| 2  | GPX track for Vasaloppet 2026 with `wb:` namespace extensions for race metadata and checkpoint distances | Done |
+| 3  | Checkpoint coordinates sourced from Wikipedia track profile. Verify against official race data when available. | Done (mock) |
+| 4  | Historical weather data source: yr.no thredds server (NetCDF, Nordic region) | Documented (future) |
+| 5  | yr.no API review: feels-like must be calculated, uncertainty via percentiles, precip type inferred from symbol_code | Done |
+| 6  | GPX-based startup seeding with `wb:` namespace, upsert logic, `DATA_DIR` config | Done |
+| 7  | OpenAPI / Swagger UI documentation via `utoipa` | Done |
+| 8  | p10/p90 uncertainty bands in CourseOverview charts and race forecast API | Done |

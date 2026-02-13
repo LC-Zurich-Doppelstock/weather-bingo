@@ -36,10 +36,6 @@ weather-bingo/
 - Use English for all code, comments, and documentation.
 - Keep commits focused and atomic — one logical change per commit.
 
-### Container-Use
-- **All development work MUST happen inside container-use environments.** Do not modify files directly on the host filesystem. Use container-use tools for all file operations, shell commands, and code changes.
-- After completing work, inform the user how to review it with `container-use log <env_id>` and `container-use checkout <env_id>`.
-
 ### Rust (API)
 - Use `sqlx` for database access with compile-time checked queries where possible.
 - Use `axum` for HTTP routing.
