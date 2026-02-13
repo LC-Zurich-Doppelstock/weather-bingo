@@ -32,7 +32,8 @@ services:
 
   frontend:
     build:
-      context: ./frontend
+      context: .
+      dockerfile: frontend/Dockerfile
       target: dev
     ports: ["3000:3000"]
     environment:
