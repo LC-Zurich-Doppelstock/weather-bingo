@@ -21,6 +21,9 @@ services:
       DATABASE_URL: postgres://wb:wb_dev@db:5432/weather_bingo
       YR_USER_AGENT: "WeatherBingo/0.1 github.com/LC-Zurich-Doppelstock/weather-bingo"
       PORT: "8080"
+      DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data:ro
     depends_on:
       db:
         condition: service_healthy

@@ -5,6 +5,8 @@ pub struct AppConfig {
     pub yr_user_agent: String,
     pub port: u16,
     pub forecast_staleness_secs: u64,
+    /// Directory containing GPX files for race seeding.
+    pub data_dir: String,
 }
 
 impl AppConfig {
@@ -22,6 +24,7 @@ impl AppConfig {
                 .unwrap_or_else(|_| "60".to_string())
                 .parse()
                 .expect("FORECAST_STALENESS_SECS must be a valid u64"),
+            data_dir: std::env::var("DATA_DIR").unwrap_or_else(|_| "./data".to_string()),
         }
     }
 }
@@ -37,11 +40,13 @@ mod tests {
         std::env::remove_var("YR_USER_AGENT");
         std::env::remove_var("PORT");
         std::env::remove_var("FORECAST_STALENESS_SECS");
+        std::env::remove_var("DATA_DIR");
 
         let config = AppConfig::from_env();
 
         assert_eq!(config.port, 8080);
         assert_eq!(config.forecast_staleness_secs, 60);
         assert!(config.yr_user_agent.contains("WeatherBingo"));
+        assert_eq!(config.data_dir, "./data");
     }
 }

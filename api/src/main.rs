@@ -89,6 +89,40 @@ async fn main() {
 
     tracing::info!("Database migrations completed");
 
+    // Seed races from GPX files
+    let data_dir = std::path::Path::new(&config.data_dir);
+    match services::gpx::load_races_from_dir(data_dir) {
+        Ok(races) => {
+            for race in &races {
+                match db::queries::upsert_race_from_gpx(&pool, race).await {
+                    Ok(race_id) => {
+                        tracing::info!(
+                            "Seeded race '{}' ({}) with {} checkpoints → id={}",
+                            race.name,
+                            race.year,
+                            race.checkpoints.len(),
+                            race_id
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to seed race '{}' ({}): {}",
+                            race.name,
+                            race.year,
+                            e
+                        );
+                    }
+                }
+            }
+            if races.is_empty() {
+                tracing::warn!("No GPX files found in {}", data_dir.display());
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to load GPX files from {}: {}", data_dir.display(), e);
+        }
+    }
+
     // Create yr.no client
     let yr_client = YrClient::new(&config.yr_user_agent);
 

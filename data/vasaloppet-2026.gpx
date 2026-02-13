@@ -1,74 +1,100 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <gpx xmlns="http://www.topografix.com/GPX/1/1"
      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+     xmlns:wb="https://github.com/LC-Zurich-Doppelstock/weather-bingo/gpx"
      xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd"
      version="1.1"
-     creator="WeatherBingo mock data">
+     creator="WeatherBingo">
 
   <metadata>
-    <name>Vasaloppet 2026</name>
-    <desc>Mock GPX track for Vasaloppet 2026 (Berga/Sälen to Mora, 90 km). Based on official track profile coordinates from Wikipedia. Intermediate points are interpolated for a realistic course shape.</desc>
+    <name>Vasaloppet</name>
+    <desc>90 km cross-country ski race from Berga (Sälen) to Mora. Based on official track profile coordinates.</desc>
     <author>
       <name>WeatherBingo</name>
       <link href="https://github.com/LC-Zurich-Doppelstock/weather-bingo"/>
     </author>
     <time>2026-02-13T00:00:00Z</time>
+    <extensions>
+      <wb:race>
+        <wb:year>2026</wb:year>
+        <wb:start_time>2026-03-01T08:00:00+01:00</wb:start_time>
+        <wb:distance_km>90</wb:distance_km>
+      </wb:race>
+    </extensions>
   </metadata>
 
   <!-- Checkpoints as waypoints -->
   <wpt lat="61.105556" lon="13.304167">
     <ele>350</ele>
     <name>Berga (Start)</name>
-    <desc>Start - 0 km</desc>
     <type>checkpoint</type>
+    <extensions>
+      <wb:distance_km>0</wb:distance_km>
+    </extensions>
   </wpt>
   <wpt lat="61.124093" lon="13.426329">
     <ele>480</ele>
     <name>Smågan</name>
-    <desc>Checkpoint - 11 km</desc>
     <type>checkpoint</type>
+    <extensions>
+      <wb:distance_km>11</wb:distance_km>
+    </extensions>
   </wpt>
   <wpt lat="61.079390" lon="13.619093">
     <ele>425</ele>
     <name>Mångsbodarna</name>
-    <desc>Checkpoint - 24 km</desc>
     <type>checkpoint</type>
+    <extensions>
+      <wb:distance_km>24</wb:distance_km>
+    </extensions>
   </wpt>
   <wpt lat="61.085556" lon="13.773056">
     <ele>420</ele>
     <name>Risberg</name>
-    <desc>Checkpoint - 35 km</desc>
     <type>checkpoint</type>
+    <extensions>
+      <wb:distance_km>35</wb:distance_km>
+    </extensions>
   </wpt>
   <wpt lat="61.138376" lon="13.962904">
     <ele>430</ele>
     <name>Evertsberg</name>
-    <desc>Checkpoint - 47 km</desc>
     <type>checkpoint</type>
+    <extensions>
+      <wb:distance_km>47</wb:distance_km>
+    </extensions>
   </wpt>
   <wpt lat="61.114820" lon="14.176688">
     <ele>230</ele>
     <name>Oxberg</name>
-    <desc>Checkpoint - 62 km</desc>
     <type>checkpoint</type>
+    <extensions>
+      <wb:distance_km>62</wb:distance_km>
+    </extensions>
   </wpt>
   <wpt lat="61.074956" lon="14.309514">
     <ele>250</ele>
     <name>Hökberg</name>
-    <desc>Checkpoint - 71 km</desc>
     <type>checkpoint</type>
+    <extensions>
+      <wb:distance_km>71</wb:distance_km>
+    </extensions>
   </wpt>
   <wpt lat="61.015236" lon="14.410089">
     <ele>205</ele>
     <name>Eldris</name>
-    <desc>Checkpoint - 81 km</desc>
     <type>checkpoint</type>
+    <extensions>
+      <wb:distance_km>81</wb:distance_km>
+    </extensions>
   </wpt>
   <wpt lat="61.007490" lon="14.545555">
     <ele>165</ele>
     <name>Mora (Finish)</name>
-    <desc>Finish - 90 km</desc>
     <type>checkpoint</type>
+    <extensions>
+      <wb:distance_km>90</wb:distance_km>
+    </extensions>
   </wpt>
 
   <!-- Race course track -->
