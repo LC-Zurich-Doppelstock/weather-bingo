@@ -15,7 +15,9 @@ services:
       retries: 5
 
   api:
-    build: ./api
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     ports: ["8080:8080"]
     environment:
       DATABASE_URL: postgres://wb:wb_dev@db:5432/weather_bingo
@@ -29,7 +31,9 @@ services:
         condition: service_healthy
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      target: dev
     ports: ["3000:3000"]
     environment:
       VITE_API_URL: http://api:8080

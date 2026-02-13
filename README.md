@@ -66,6 +66,22 @@ weather-bingo/
 └── README.md
 ```
 
+## Cloud Deployment (Railway)
+
+The app can be deployed to [Railway](https://railway.com/) as a PoC environment. See `specs.md` §8.3 for full details.
+
+**Quick setup:**
+
+1. Create a Railway project and connect the GitHub repo
+2. Add a PostgreSQL plugin (managed, one-click)
+3. Create an API service (root: `/`, Dockerfile: `api/Dockerfile`)
+4. Create a frontend service (root: `/`, Dockerfile: `frontend/Dockerfile`)
+5. Set environment variables (see `specs.md` §8.3)
+6. Generate a public domain for the frontend service
+7. Push to `main` — Railway auto-deploys
+
+The frontend Dockerfile is multi-stage: `docker compose` targets the `dev` stage (Vite dev server), while Railway builds the full image ending at the `production` stage (nginx + static files + API reverse proxy).
+
 ## Documentation
 
 See [`specs.md`](specs.md) for the full technical specification including data model, API contracts, UI wireframes, and colour system.

@@ -541,7 +541,9 @@ services:
       retries: 5
 
   api:
-    build: ./api
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     ports: ["8080:8080"]
     environment:
       DATABASE_URL: postgres://wb:wb_dev@db:5432/weather_bingo
@@ -555,7 +557,9 @@ services:
         condition: service_healthy
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      target: dev
     ports: ["3000:3000"]
     environment:
       VITE_API_URL: http://api:8080
@@ -597,7 +601,8 @@ weather-bingo/
 │
 ├── frontend/                   # React + TypeScript
 │   ├── package.json
-│   ├── Dockerfile
+│   ├── Dockerfile              # Multi-stage: dev (Vite) / production (nginx)
+│   ├── nginx.conf.template     # Production nginx config (API proxy + SPA)
 │   ├── vite.config.ts          # Vite + Vitest config (inline test block)
 │   ├── tsconfig.json
 │   ├── src/
@@ -644,6 +649,38 @@ weather-bingo/
 ├── README.md
 └── specs.md
 ```
+
+### 8.3 Cloud Deployment (Railway)
+
+The application is deployable to [Railway](https://railway.com/) as a PoC/staging environment. Railway auto-builds from the GitHub repo on push to `main`.
+
+**Architecture:**
+
+| Service | Railway Type | Build Source | Public |
+|---------|-------------|-------------|--------|
+| PostgreSQL | Railway plugin (managed) | — | No |
+| API | Docker service | `api/Dockerfile` (context: repo root) | No (internal only) |
+| Frontend | Docker service | `frontend/Dockerfile` (full build, `production` stage) | Yes (public domain) |
+
+**How it works:**
+
+- The **API Dockerfile** uses the repo root as its build context, so it can `COPY data/ ./data/` to bake GPX seed files into the image (no volume mounts on Railway).
+- The **frontend Dockerfile** is multi-stage. Locally, `docker-compose` targets the `dev` stage (Vite dev server). On Railway, the full build runs through to the `production` stage, which builds static assets and serves them via nginx.
+- **nginx** reverse-proxies `/api/`, `/swagger-ui/`, and `/api-docs/` requests to the API service using Railway's internal DNS (`http://api.railway.internal:<PORT>`). The `API_URL` is injected via environment variable and substituted into `nginx.conf.template` at container startup.
+- The frontend API client uses **relative paths** (`/api/v1/...`), so the nginx proxy is transparent — no frontend code changes needed.
+
+**Railway environment variables:**
+
+| Service | Variable | Value |
+|---------|----------|-------|
+| API | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (auto-injected) |
+| API | `YR_USER_AGENT` | `WeatherBingo/0.1 github.com/LC-Zurich-Doppelstock/weather-bingo` |
+| API | `DATA_DIR` | `/app/data` |
+| Frontend | `API_URL` | `http://api.railway.internal:${{api.PORT}}` |
+
+**Watch paths** (to avoid unnecessary rebuilds):
+- API: `api/**`, `data/**`
+- Frontend: `frontend/**`
 
 ---
 
@@ -836,7 +873,7 @@ A future improvement will adjust pacing based on elevation profile from GPX data
 - [ ] Push notifications for significant forecast changes
 - [ ] E2E tests with Playwright
 - [ ] CI/CD pipeline
-- [ ] Cloud deployment
+- [ ] ~~Cloud deployment~~ (Railway — see §8.3)
 
 ---
 
@@ -852,3 +889,4 @@ A future improvement will adjust pacing based on elevation profile from GPX data
 | 6  | GPX-based startup seeding with `wb:` namespace, upsert logic, `DATA_DIR` config | Done |
 | 7  | OpenAPI / Swagger UI documentation via `utoipa` | Done |
 | 8  | p10/p90 uncertainty bands in CourseOverview charts and race forecast API | Done |
+| 9  | Railway cloud deployment: multi-stage frontend Dockerfile, nginx reverse proxy, repo-root API build context | Done |
