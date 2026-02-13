@@ -1,0 +1,19 @@
+{
+  "base_image": "ubuntu:24.04",
+  "install_commands": [
+    "apt-get update && apt-get install -y curl build-essential pkg-config libssl-dev libpq-dev postgresql-client git ca-certificates gnupg",
+    "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable",
+    ". $HOME/.cargo/env && cargo install sqlx-cli --no-default-features --features postgres && cargo install cargo-watch",
+    "curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs",
+    "npm install -g npm@latest"
+  ],
+  "setup_commands": [
+    ". $HOME/.cargo/env"
+  ],
+  "env": {
+    "DATABASE_URL": "postgres://wb:wb_dev@db:5432/weather_bingo",
+    "YR_USER_AGENT": "WeatherBingo/0.1 github.com/LC-Zurich-Doppelstock/weather-bingo",
+    "PORT": "8080",
+    "PATH": "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  }
+}

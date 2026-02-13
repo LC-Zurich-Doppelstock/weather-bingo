@@ -1,0 +1,32 @@
+# Rust
+api/target/
+**/*.rs.bk
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes
+pgdata/
+
+# Test artifacts
+*.profraw
+lcov.info
+coverage/

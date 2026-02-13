@@ -1,0 +1,90 @@
+import { useEffect, useRef } from "react";
+import { MapContainer, TileLayer, useMap } from "react-leaflet";
+import type { LatLngBoundsExpression } from "leaflet";
+import "leaflet/dist/leaflet.css";
+
+import CoursePolyline from "./CoursePolyline";
+import CheckpointMarker from "./CheckpointMarker";
+import type { Checkpoint } from "../../api/types";
+
+interface RaceMapProps {
+  /** Raw GPX XML string for the race course. */
+  courseGpx: string | null;
+  /** Checkpoints along the course. */
+  checkpoints: Checkpoint[];
+  /** Currently selected checkpoint ID. */
+  selectedCheckpointId: string | null;
+  /** Callback when a checkpoint marker is clicked. */
+  onCheckpointSelect: (id: string) => void;
+}
+
+/** Dark-themed tile layer URL (CartoDB Dark Matter). */
+const DARK_TILE_URL =
+  "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+
+const DARK_TILE_ATTRIBUTION =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>';
+
+/** Default center (central Sweden) and zoom for when no course is loaded. */
+const DEFAULT_CENTER: [number, number] = [61.5, 14.5];
+const DEFAULT_ZOOM = 7;
+
+/**
+ * Sub-component that fits the map bounds when checkpoints change.
+ */
+function FitBounds({ checkpoints }: { checkpoints: Checkpoint[] }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (checkpoints.length === 0) return;
+
+    const bounds: LatLngBoundsExpression = checkpoints.map(
+      (cp) => [cp.latitude, cp.longitude] as [number, number]
+    );
+
+    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
+  }, [checkpoints, map]);
+
+  return null;
+}
+
+/**
+ * Interactive Leaflet map showing the race course and checkpoint markers.
+ * Uses CartoDB Dark Matter tiles for the dark theme.
+ */
+export default function RaceMap({
+  courseGpx,
+  checkpoints,
+  selectedCheckpointId,
+  onCheckpointSelect,
+}: RaceMapProps) {
+  const mapRef = useRef(null);
+
+  return (
+    <div role="application" aria-label="Race course map" className="h-full w-full">
+      <MapContainer
+        ref={mapRef}
+        center={DEFAULT_CENTER}
+        zoom={DEFAULT_ZOOM}
+        className="h-full w-full"
+        zoomControl={true}
+        attributionControl={true}
+      >
+      <TileLayer url={DARK_TILE_URL} attribution={DARK_TILE_ATTRIBUTION} />
+
+      <FitBounds checkpoints={checkpoints} />
+
+      {courseGpx && <CoursePolyline gpxData={courseGpx} />}
+
+      {checkpoints.map((cp) => (
+        <CheckpointMarker
+          key={cp.id}
+          checkpoint={cp}
+          isSelected={cp.id === selectedCheckpointId}
+          onClick={onCheckpointSelect}
+        />
+      ))}
+    </MapContainer>
+    </div>
+  );
+}
