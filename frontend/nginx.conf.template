@@ -5,10 +5,17 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    # Resolve upstream DNS at request time (not startup) so nginx starts
+    # even if the API service isn't ready yet.
+    resolver ${NAMESERVER} valid=30s ipv6=off;
+
+    # Store upstream in a variable so nginx resolves lazily (not at config load).
+    set $api_upstream "${API_URL}";
+
     # Reverse-proxy API requests to the backend service.
     # In Railway: API_URL=http://api.railway.internal:8080
     location /api/ {
-        proxy_pass ${API_URL};
+        proxy_pass $api_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -17,14 +24,14 @@ server {
 
     # Swagger UI proxy (served by the API)
     location /swagger-ui/ {
-        proxy_pass ${API_URL};
+        proxy_pass $api_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
 
     # OpenAPI spec proxy
     location /api-docs/ {
-        proxy_pass ${API_URL};
+        proxy_pass $api_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }

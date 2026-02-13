@@ -37,7 +37,9 @@ COPY --from=build /app/dist /usr/share/nginx/html
 # automatic envsubst (which replaces ALL $vars, clobbering $host etc.)
 COPY frontend/nginx.conf.template /etc/nginx/nginx.conf.template
 
-# Substitute only $API_URL and $PORT, then start nginx
-CMD ["/bin/sh", "-c", "envsubst '${API_URL} ${PORT}' < /etc/nginx/nginx.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]
+# Substitute $API_URL, $PORT, and $NAMESERVER, then start nginx.
+# NAMESERVER is extracted from the container's /etc/resolv.conf so that
+# Railway's internal DNS (*.railway.internal) resolves correctly.
+CMD ["/bin/sh", "-c", "export NAMESERVER=$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf) && envsubst '${API_URL} ${PORT} ${NAMESERVER}' < /etc/nginx/nginx.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]
 
 EXPOSE 80
