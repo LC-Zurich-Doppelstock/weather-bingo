@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetchRaces, fetchRace, fetchCheckpoints } from "../api/client";
+import { fetchRaces, fetchCourse, fetchCheckpoints } from "../api/client";
 
 /** Fetch all available races. */
 export function useRaces() {
@@ -9,11 +9,11 @@ export function useRaces() {
   });
 }
 
-/** Fetch a single race with GPX data. */
-export function useRace(raceId: string | null) {
+/** Fetch course coordinates for a race. */
+export function useCourse(raceId: string | null) {
   return useQuery({
-    queryKey: ["race", raceId],
-    queryFn: () => fetchRace(raceId!),
+    queryKey: ["course", raceId],
+    queryFn: () => fetchCourse(raceId!),
     enabled: !!raceId,
   });
 }

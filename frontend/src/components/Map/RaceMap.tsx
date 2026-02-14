@@ -5,11 +5,11 @@ import "leaflet/dist/leaflet.css";
 
 import CoursePolyline from "./CoursePolyline";
 import CheckpointMarker from "./CheckpointMarker";
-import type { Checkpoint } from "../../api/types";
+import type { Checkpoint, CoursePoint } from "../../api/types";
 
 interface RaceMapProps {
-  /** Raw GPX XML string for the race course. */
-  courseGpx: string | null;
+  /** Pre-parsed course coordinates from the API. */
+  course: CoursePoint[] | null;
   /** Checkpoints along the course. */
   checkpoints: Checkpoint[];
   /** Currently selected checkpoint ID. */
@@ -53,7 +53,7 @@ function FitBounds({ checkpoints }: { checkpoints: Checkpoint[] }) {
  * Uses CartoDB Dark Matter tiles for the dark theme.
  */
 export default function RaceMap({
-  courseGpx,
+  course,
   checkpoints,
   selectedCheckpointId,
   onCheckpointSelect,
@@ -74,7 +74,7 @@ export default function RaceMap({
 
       <FitBounds checkpoints={checkpoints} />
 
-      {courseGpx && <CoursePolyline gpxData={courseGpx} />}
+      {course && course.length > 0 && <CoursePolyline points={course} />}
 
       {checkpoints.map((cp) => (
         <CheckpointMarker

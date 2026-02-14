@@ -36,7 +36,7 @@ use services::yr::YrClient;
     paths(
         routes::health::health_check,
         routes::races::list_races,
-        routes::races::get_race,
+        routes::races::get_race_course,
         routes::races::get_checkpoints,
         routes::forecasts::get_checkpoint_forecast,
         routes::forecasts::get_checkpoint_forecast_history,
@@ -46,7 +46,7 @@ use services::yr::YrClient;
         schemas(
             routes::health::HealthResponse,
             routes::races::RaceListItem,
-            routes::races::RaceDetailResponse,
+            services::gpx::CoursePoint,
             routes::races::CheckpointResponse,
             routes::forecasts::ForecastWeather,
             routes::forecasts::ForecastResponse,
@@ -148,7 +148,10 @@ async fn main() {
     // Race routes use PgPool state directly; forecast routes use AppState.
     let race_routes = Router::new()
         .route("/api/v1/races", get(routes::races::list_races))
-        .route("/api/v1/races/:id", get(routes::races::get_race))
+        .route(
+            "/api/v1/races/:id/course",
+            get(routes::races::get_race_course),
+        )
         .route(
             "/api/v1/races/:id/checkpoints",
             get(routes::races::get_checkpoints),

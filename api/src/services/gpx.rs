@@ -8,8 +8,10 @@
 use chrono::{DateTime, FixedOffset};
 use quick_xml::events::Event;
 use quick_xml::Reader;
+use serde::Serialize;
 use std::path::Path;
 use thiserror::Error;
+use utoipa::ToSchema;
 
 /// Errors that can occur during GPX parsing.
 #[derive(Debug, Error)]
@@ -283,6 +285,92 @@ pub fn parse_gpx(gpx_xml: &str) -> Result<GpxRace, GpxError> {
     })
 }
 
+/// A single coordinate point along the race course.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CoursePoint {
+    /// Latitude (WGS84)
+    pub lat: f64,
+    /// Longitude (WGS84)
+    pub lon: f64,
+    /// Elevation in metres above sea level
+    pub ele: f64,
+}
+
+/// Extract track points from GPX XML as `[{lat, lon, ele}]` coordinates.
+///
+/// Reads `<trkpt>` elements from `<trkseg>` sections, extracting the `lat`/`lon`
+/// attributes and nested `<ele>` element. Points without elevation default to 0.
+pub fn extract_track_points(gpx_xml: &str) -> Result<Vec<CoursePoint>, GpxError> {
+    let mut reader = Reader::from_str(gpx_xml);
+    let mut points = Vec::new();
+
+    let mut in_trkpt = false;
+    let mut trkpt_lat: f64 = 0.0;
+    let mut trkpt_lon: f64 = 0.0;
+    let mut trkpt_ele: Option<f64> = None;
+    let mut reading_ele = false;
+
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let local = local_name_str(e.name().as_ref());
+                match local.as_str() {
+                    "trkpt" => {
+                        in_trkpt = true;
+                        trkpt_ele = None;
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            let val = std::str::from_utf8(&attr.value).unwrap_or("");
+                            match key {
+                                "lat" => trkpt_lat = val.parse().unwrap_or(0.0),
+                                "lon" => trkpt_lon = val.parse().unwrap_or(0.0),
+                                _ => {}
+                            }
+                        }
+                    }
+                    "ele" if in_trkpt => {
+                        reading_ele = true;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(ref e)) => {
+                if reading_ele {
+                    let text = e.unescape().unwrap_or_default().trim().to_string();
+                    if !text.is_empty() {
+                        trkpt_ele = Some(text.parse().unwrap_or(0.0));
+                    }
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                let local = local_name_str(e.name().as_ref());
+                match local.as_str() {
+                    "ele" if in_trkpt => {
+                        reading_ele = false;
+                    }
+                    "trkpt" => {
+                        points.push(CoursePoint {
+                            lat: trkpt_lat,
+                            lon: trkpt_lon,
+                            ele: trkpt_ele.unwrap_or(0.0),
+                        });
+                        in_trkpt = false;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(GpxError::Xml(e)),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(points)
+}
+
 /// Extract the local name from a potentially namespaced XML element name.
 /// e.g. `{http://...}name` -> `name`, `wb:name` -> `name`, `name` -> `name`
 fn local_name_str(full: &[u8]) -> String {
@@ -501,5 +589,58 @@ mod tests {
         assert_eq!(race.checkpoints[0].distance_km, 0.0);
         assert_eq!(race.checkpoints[8].name, "Mora (Finish)");
         assert_eq!(race.checkpoints[8].distance_km, 90.0);
+    }
+
+    #[test]
+    fn test_extract_track_points_minimal() {
+        let points = extract_track_points(MINIMAL_GPX).unwrap();
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[0].lat, 61.1);
+        assert_eq!(points[0].lon, 13.3);
+        assert_eq!(points[0].ele, 350.0);
+        assert_eq!(points[1].lat, 61.0);
+        assert_eq!(points[1].lon, 14.5);
+        assert_eq!(points[1].ele, 165.0);
+    }
+
+    #[test]
+    fn test_extract_track_points_vasaloppet() {
+        let gpx = include_str!("../../../data/vasaloppet-2026.gpx");
+        let points = extract_track_points(gpx).unwrap();
+        // The Vasaloppet GPX has 384 track points
+        assert!(
+            points.len() > 100,
+            "Expected many track points, got {}",
+            points.len()
+        );
+        // First and last points should have valid coordinates
+        assert!(points[0].lat > 60.0 && points[0].lat < 62.0);
+        assert!(points[0].lon > 13.0 && points[0].lon < 15.0);
+        assert!(points[0].ele > 0.0);
+        let last = points.last().unwrap();
+        assert!(last.lat > 60.0 && last.lat < 62.0);
+    }
+
+    #[test]
+    fn test_extract_track_points_no_tracks() {
+        let gpx = r#"<?xml version="1.0"?>
+<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1" creator="test">
+  <wpt lat="61.1" lon="13.3"><ele>350</ele><name>A Point</name></wpt>
+</gpx>"#;
+        let points = extract_track_points(gpx).unwrap();
+        assert!(points.is_empty());
+    }
+
+    #[test]
+    fn test_extract_track_points_missing_ele() {
+        let gpx = r#"<?xml version="1.0"?>
+<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1" creator="test">
+  <trk><trkseg>
+    <trkpt lat="61.1" lon="13.3"></trkpt>
+  </trkseg></trk>
+</gpx>"#;
+        let points = extract_track_points(gpx).unwrap();
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].ele, 0.0); // defaults to 0
     }
 }

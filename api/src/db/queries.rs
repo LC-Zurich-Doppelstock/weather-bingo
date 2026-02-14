@@ -4,7 +4,7 @@ use rust_decimal::Decimal;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::models::{Checkpoint, Forecast, Race, RaceDetail, YrCachedResponse};
+use super::models::{Checkpoint, Forecast, Race, YrCachedResponse};
 
 /// Forecast time tolerance window (hours). SQL queries use a ±N hour BETWEEN
 /// range so the composite index (checkpoint_id, forecast_time, fetched_at DESC)
@@ -270,15 +270,13 @@ pub async fn list_races(pool: &PgPool) -> Result<Vec<Race>, sqlx::Error> {
     .await
 }
 
-/// Get a single race by ID (includes GPX).
-pub async fn get_race(pool: &PgPool, id: Uuid) -> Result<Option<RaceDetail>, sqlx::Error> {
-    sqlx::query_as::<_, RaceDetail>(
-        "SELECT id, name, year, start_time, distance_km, course_gpx, created_at, updated_at
-         FROM races WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
+/// Get just the GPX XML for a race (for course coordinate extraction).
+pub async fn get_race_course_gpx(pool: &PgPool, id: Uuid) -> Result<Option<String>, sqlx::Error> {
+    let row: Option<(String,)> = sqlx::query_as("SELECT course_gpx FROM races WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| r.0))
 }
 
 /// Get all checkpoints for a race, ordered by sort_order.

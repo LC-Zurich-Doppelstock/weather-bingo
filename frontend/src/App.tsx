@@ -4,7 +4,7 @@ import Footer from "./components/Layout/Footer";
 import TargetTimeInput from "./components/Controls/TargetTimeInput";
 import RaceMap from "./components/Map/RaceMap";
 import Sidebar from "./components/Sidebar/Sidebar";
-import { useRace, useCheckpoints } from "./hooks/useRace";
+import { useRaces, useCourse, useCheckpoints } from "./hooks/useRace";
 
 /** Max skier speed in km/h (sprint pace). */
 const MAX_SPEED_KMH = 30;
@@ -20,8 +20,15 @@ function App() {
     string | null
   >(null);
 
-  const { data: race } = useRace(selectedRaceId);
+  const { data: races } = useRaces();
+  const { data: course } = useCourse(selectedRaceId);
   const { data: checkpoints } = useCheckpoints(selectedRaceId);
+
+  // Derive selected race from the races list (no separate detail endpoint)
+  const race = useMemo(
+    () => races?.find((r) => r.id === selectedRaceId) ?? null,
+    [races, selectedRaceId]
+  );
 
   // Derive slider min/max from race distance
   const { minDuration, maxDuration, defaultDuration } = useMemo(() => {
@@ -69,7 +76,7 @@ function App() {
           {/* Race map */}
           <div className="h-64 lg:h-full">
             <RaceMap
-              courseGpx={race?.course_gpx ?? null}
+              course={course ?? null}
               checkpoints={checkpoints ?? []}
               selectedCheckpointId={selectedCheckpointId}
               onCheckpointSelect={setSelectedCheckpointId}

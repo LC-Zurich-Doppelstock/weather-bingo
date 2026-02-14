@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::db::{models, queries};
 use crate::errors::{AppError, ErrorResponse};
+use crate::services::gpx::CoursePoint;
 
 /// Response type for GET /api/v1/races (list, without GPX).
 #[derive(Debug, Serialize, ToSchema)]
@@ -32,36 +33,6 @@ impl From<models::Race> for RaceListItem {
             year: r.year,
             start_time: r.start_time.to_rfc3339(),
             distance_km: r.distance_km.to_f64().unwrap_or(0.0),
-        }
-    }
-}
-
-/// Response type for GET /api/v1/races/:id (detail, with GPX).
-#[derive(Debug, Serialize, ToSchema)]
-pub struct RaceDetailResponse {
-    /// Unique race identifier
-    pub id: Uuid,
-    /// Race name
-    pub name: String,
-    /// Race year
-    pub year: i32,
-    /// Race start time in ISO 8601 / RFC 3339 format
-    pub start_time: String,
-    /// Total race distance in kilometres
-    pub distance_km: f64,
-    /// Full GPX course data as XML string
-    pub course_gpx: String,
-}
-
-impl From<models::RaceDetail> for RaceDetailResponse {
-    fn from(r: models::RaceDetail) -> Self {
-        Self {
-            id: r.id,
-            name: r.name,
-            year: r.year,
-            start_time: r.start_time.to_rfc3339(),
-            distance_km: r.distance_km.to_f64().unwrap_or(0.0),
-            course_gpx: r.course_gpx,
         }
     }
 }
@@ -114,27 +85,29 @@ pub async fn list_races(State(pool): State<PgPool>) -> Result<Json<Vec<RaceListI
     Ok(Json(items))
 }
 
-/// Get race details including GPX course data.
+/// Get race course as pre-parsed JSON coordinates.
 #[utoipa::path(
     get,
-    path = "/api/v1/races/{id}",
+    path = "/api/v1/races/{id}/course",
     tag = "Races",
     params(
         ("id" = Uuid, Path, description = "Race UUID"),
     ),
     responses(
-        (status = 200, description = "Race details with GPX", body = RaceDetailResponse),
+        (status = 200, description = "Course coordinates as [lat, lon, ele] points", body = Vec<CoursePoint>),
         (status = 404, description = "Race not found", body = ErrorResponse),
     )
 )]
-pub async fn get_race(
+pub async fn get_race_course(
     State(pool): State<PgPool>,
     Path(id): Path<Uuid>,
-) -> Result<Json<RaceDetailResponse>, AppError> {
-    let race = queries::get_race(&pool, id)
+) -> Result<Json<Vec<CoursePoint>>, AppError> {
+    let gpx = queries::get_race_course_gpx(&pool, id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Race {} not found", id)))?;
-    Ok(Json(RaceDetailResponse::from(race)))
+    let points = crate::services::gpx::extract_track_points(&gpx)
+        .map_err(|e| AppError::InternalError(format!("Failed to parse course GPX: {}", e)))?;
+    Ok(Json(points))
 }
 
 /// Get all checkpoints for a race, ordered by distance from start.

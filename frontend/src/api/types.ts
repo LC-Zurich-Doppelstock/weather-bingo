@@ -8,8 +8,11 @@ export interface Race {
   distance_km: number;
 }
 
-export interface RaceDetail extends Race {
-  course_gpx: string;
+/** A single coordinate point along the race course. */
+export interface CoursePoint {
+  lat: number;
+  lon: number;
+  ele: number;
 }
 
 export interface Checkpoint {

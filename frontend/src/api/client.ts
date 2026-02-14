@@ -5,7 +5,7 @@
 
 import type {
   Race,
-  RaceDetail,
+  CoursePoint,
   Checkpoint,
   ForecastResponse,
   ForecastHistoryResponse,
@@ -28,9 +28,9 @@ export function fetchRaces(): Promise<Race[]> {
   return fetchJson<Race[]>(`${BASE_URL}/races`);
 }
 
-/** Get a single race with GPX course data. */
-export function fetchRace(id: string): Promise<RaceDetail> {
-  return fetchJson<RaceDetail>(`${BASE_URL}/races/${id}`);
+/** Get course coordinates for a race. */
+export function fetchCourse(raceId: string): Promise<CoursePoint[]> {
+  return fetchJson<CoursePoint[]>(`${BASE_URL}/races/${raceId}/course`);
 }
 
 /** Get all checkpoints for a race. */

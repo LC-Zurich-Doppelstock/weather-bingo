@@ -19,7 +19,7 @@ pub struct YrCachedResponse {
     pub created_at: DateTime<Utc>,
 }
 
-/// Race summary (without GPX data), used for list endpoint.
+/// Race summary (without GPX data), used for list and summary endpoints.
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct Race {
     pub id: Uuid,
@@ -27,19 +27,6 @@ pub struct Race {
     pub year: i32,
     pub start_time: DateTime<Utc>,
     pub distance_km: Decimal,
-}
-
-/// Full race detail including GPX course data.
-#[derive(Debug, Clone, Serialize, FromRow)]
-pub struct RaceDetail {
-    pub id: Uuid,
-    pub name: String,
-    pub year: i32,
-    pub start_time: DateTime<Utc>,
-    pub distance_km: Decimal,
-    pub course_gpx: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 /// A checkpoint along a race course.
