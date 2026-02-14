@@ -1,12 +1,12 @@
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::FromRow;
 use uuid::Uuid;
 
 /// Cached yr.no full timeseries response, keyed by (lat, lon, elevation).
 /// Uses yr.no's Expires/Last-Modified headers for cache validity.
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, FromRow)]
 pub struct YrCachedResponse {
     pub id: Uuid,
     pub latitude: Decimal,

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import type { LatLngBoundsExpression } from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -64,12 +64,9 @@ export default function RaceMap({
   onCheckpointSelect,
   onCheckpointHover,
 }: RaceMapProps) {
-  const mapRef = useRef(null);
-
   return (
     <div role="application" aria-label="Race course map" className="h-full w-full">
       <MapContainer
-        ref={mapRef}
         center={DEFAULT_CENTER}
         zoom={DEFAULT_ZOOM}
         className="h-full w-full"

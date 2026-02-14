@@ -1,5 +1,5 @@
+import { useMemo } from "react";
 import type { Checkpoint, Race } from "../../api/types";
-import { usePassThroughTime } from "../../hooks/usePassThroughTime";
 import { useForecast, useRaceForecast } from "../../hooks/useForecast";
 import CheckpointDetail from "./CheckpointDetail";
 import CourseOverview from "./CourseOverview";
@@ -37,22 +37,29 @@ export default function Sidebar({
   const selectedCheckpoint =
     checkpoints.find((cp) => cp.id === selectedCheckpointId) ?? null;
 
-  const passTime = usePassThroughTime(
-    selectedCheckpoint,
-    race,
-    targetDurationHours
-  );
+  // Always fetch race forecast — we need expected_time for checkpoint detail view too
+  const {
+    data: raceForecast,
+    isLoading: raceForecastLoading,
+    isError: raceForecastError,
+    refetch: refetchRaceForecast,
+  } = useRaceForecast(race?.id ?? null, targetDurationHours);
 
-  const { data: forecast, isLoading: forecastLoading } = useForecast(
-    selectedCheckpointId,
-    passTime
-  );
-
-  const { data: raceForecast, isLoading: raceForecastLoading } =
-    useRaceForecast(
-      !selectedCheckpointId ? race?.id ?? null : null,
-      targetDurationHours
+  // Look up expected_time from the race forecast response (server-computed pacing)
+  const passTime = useMemo(() => {
+    if (!selectedCheckpointId || !raceForecast) return null;
+    const cp = raceForecast.checkpoints.find(
+      (c) => c.checkpoint_id === selectedCheckpointId
     );
+    return cp?.expected_time ?? null;
+  }, [selectedCheckpointId, raceForecast]);
+
+  const {
+    data: forecast,
+    isLoading: forecastLoading,
+    isError: forecastError,
+    refetch: refetchForecast,
+  } = useForecast(selectedCheckpointId, passTime);
 
   // No race selected
   if (!race) {
@@ -64,24 +71,116 @@ export default function Sidebar({
   }
 
   // Checkpoint selected -> show detail view
-  if (selectedCheckpoint && passTime) {
-    return (
-      <div className="h-full overflow-y-auto" role="region" aria-label={`Weather details for ${selectedCheckpoint.name}`}>
-        <div className="sticky top-0 z-10 border-b border-border bg-surface p-3">
-          <button
-            onClick={onClearSelection}
-            className="text-sm text-text-secondary hover:text-primary transition-colors"
-            aria-label="Back to course overview"
-          >
-            &larr; Course Overview
-          </button>
+  if (selectedCheckpoint) {
+    // Still waiting for race forecast to resolve expected_time
+    if (!passTime && raceForecastLoading) {
+      return (
+        <div className="h-full overflow-y-auto" role="region" aria-label={`Weather details for ${selectedCheckpoint.name}`}>
+          <div className="sticky top-0 z-10 border-b border-border bg-surface p-3">
+            <button
+              onClick={onClearSelection}
+              className="text-sm text-text-secondary hover:text-primary transition-colors"
+              aria-label="Back to course overview"
+            >
+              &larr; Course Overview
+            </button>
+          </div>
+          <CheckpointDetail
+            checkpoint={selectedCheckpoint}
+            passTime=""
+            forecast={null}
+            isLoading={true}
+          />
         </div>
-        <CheckpointDetail
-          checkpoint={selectedCheckpoint}
-          passTime={passTime}
-          forecast={forecast ?? null}
-          isLoading={forecastLoading}
-        />
+      );
+    }
+
+    // Race forecast failed — can't determine expected_time
+    if (!passTime && raceForecastError) {
+      return (
+        <div className="h-full overflow-y-auto" role="region" aria-label={`Weather details for ${selectedCheckpoint.name}`}>
+          <div className="sticky top-0 z-10 border-b border-border bg-surface p-3">
+            <button
+              onClick={onClearSelection}
+              className="text-sm text-text-secondary hover:text-primary transition-colors"
+              aria-label="Back to course overview"
+            >
+              &larr; Course Overview
+            </button>
+          </div>
+          <div className="p-4">
+            <p className="text-error">Failed to load forecast data.</p>
+            <button
+              onClick={() => refetchRaceForecast()}
+              className="mt-2 text-sm text-primary hover:text-primary-hover transition-colors"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Forecast error (race forecast loaded fine but individual forecast failed)
+    if (forecastError && !forecastLoading) {
+      return (
+        <div className="h-full overflow-y-auto" role="region" aria-label={`Weather details for ${selectedCheckpoint.name}`}>
+          <div className="sticky top-0 z-10 border-b border-border bg-surface p-3">
+            <button
+              onClick={onClearSelection}
+              className="text-sm text-text-secondary hover:text-primary transition-colors"
+              aria-label="Back to course overview"
+            >
+              &larr; Course Overview
+            </button>
+          </div>
+          <div className="p-4">
+            <p className="text-error">Failed to load forecast data.</p>
+            <button
+              onClick={() => refetchForecast()}
+              className="mt-2 text-sm text-primary hover:text-primary-hover transition-colors"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (passTime) {
+      return (
+        <div className="h-full overflow-y-auto" role="region" aria-label={`Weather details for ${selectedCheckpoint.name}`}>
+          <div className="sticky top-0 z-10 border-b border-border bg-surface p-3">
+            <button
+              onClick={onClearSelection}
+              className="text-sm text-text-secondary hover:text-primary transition-colors"
+              aria-label="Back to course overview"
+            >
+              &larr; Course Overview
+            </button>
+          </div>
+          <CheckpointDetail
+            checkpoint={selectedCheckpoint}
+            passTime={passTime}
+            forecast={forecast ?? null}
+            isLoading={forecastLoading}
+          />
+        </div>
+      );
+    }
+  }
+
+  // Race forecast error on course overview
+  if (raceForecastError) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
+        <p className="text-error">Failed to load forecast data.</p>
+        <button
+          onClick={() => refetchRaceForecast()}
+          className="text-sm text-primary hover:text-primary-hover transition-colors"
+        >
+          Retry
+        </button>
       </div>
     );
   }

@@ -116,7 +116,7 @@ Table: forecasts
 └── created_at              TIMESTAMPTZ
 ```
 
-> **Note:** Forecast data is append-only. When fresh data is fetched from yr.no, only the forecast entry closest to the requested pass-through time is extracted and stored (one row per checkpoint per request). A partial unique index prevents duplicate rows for the same `(checkpoint_id, forecast_time, yr_model_run_at)` combination. The `fetched_at` column distinguishes forecast versions from different model runs.
+> **Note:** Forecast data is append-only. Fresh data from yr.no is cached as raw JSON in `yr_responses` and extracted on-read (see Section 4.2). The extracted forecast entry is also written to the `forecasts` table for history tracking using `ON CONFLICT DO NOTHING` on the partial unique index `(checkpoint_id, forecast_time, yr_model_run_at) WHERE yr_model_run_at IS NOT NULL`, preventing duplicate rows. The `fetched_at` column distinguishes forecast versions from different model runs.
 
 ### 3.4 Indexes & Constraints
 
@@ -135,11 +135,11 @@ Table: forecasts
 
 #### Races
 
-| Method | Path                          | Description                          |
-| ------ | ----------------------------- | ------------------------------------ |
-| GET    | `/api/v1/races`               | List all available races             |
-| GET    | `/api/v1/races/:id`           | Get race details (incl. GPX course)  |
-| GET    | `/api/v1/races/:id/checkpoints` | Get all checkpoints for a race     |
+| Method | Path                             | Description                                      |
+| ------ | -------------------------------- | ------------------------------------------------ |
+| GET    | `/api/v1/races`                  | List all available races                         |
+| GET    | `/api/v1/races/:id/course`       | Get parsed course GPS points (lat/lon/ele array) |
+| GET    | `/api/v1/races/:id/checkpoints`  | Get all checkpoints for a race                   |
 
 #### Forecasts
 
@@ -172,28 +172,35 @@ When extracting a forecast for a requested time, the API finds the closest yr.no
 
 Resolution is detected per-entry: if `next_1_hours` is present, the entry is Hourly; otherwise SixHourly.
 
-#### Data Flow
+#### Data Flow (Extract-on-Read)
+
+The API uses an **extract-on-read** architecture: the full yr.no JSON response is cached in `yr_responses`, and forecasts are extracted in-memory from the cached JSON at request time rather than pre-extracted on write. Extracted forecasts are also written to the `forecasts` table for historical tracking (append-only, `ON CONFLICT DO NOTHING`).
 
 ```
 1. UI requests forecast for a specific checkpoint pass-through time
 
-2. Check DB for a cached forecast near that time (±3 hour window)
-   AND check if the yr.no response cache is still valid (not expired)
-   → If both: return cached forecast from DB (fast path)
+2. Ensure yr.no cache is fresh for the checkpoint's location:
+   → Check yr_responses for a non-expired cached response
+   → If expired or missing: fetch from yr.no (conditional: If-Modified-Since)
+   → If yr.no returns 200: store new response in yr_responses
+   → If yr.no returns 304: bump cache expiry on existing row
 
-3. If yr.no cache expired or no forecast stored:
-   → Fetch fresh timeseries from yr.no (conditional: If-Modified-Since)
-   → Cache the full JSON response in yr_responses
-   → Extract ONLY the single forecast entry closest to the requested time
+3. Read the raw JSON from yr_responses and extract in-memory:
+   → Find the timeseries entry closest to the requested time
+   → Apply resolution-aware tolerance (1h for hourly, 3h for 6-hourly)
    → Compute calculated fields (feels_like_c, precipitation_type)
-   → Insert that one row into forecasts
    → Return to client
 
-4. If yr.no returns 304 Not Modified:
-   → Bump the cache expiry, return existing forecast from DB
+4. Async write-through: insert extracted forecast into forecasts table
+   (ON CONFLICT DO NOTHING — deduplicates on checkpoint_id,
+   forecast_time, yr_model_run_at using partial unique index)
 
-5. If yr.no is unreachable:
-   → Return stale cached forecast with X-Forecast-Stale: true header
+5. If yr.no is unreachable and no cached response exists:
+   → Fall back to most recent forecast from DB
+   → Return with X-Forecast-Stale: true header
+
+6. If no data available at all:
+   → Return 502 error
 ```
 
 #### Race Endpoint (batch)
@@ -425,7 +432,7 @@ Derived from the reference artwork (tropical botanical pattern on black backgrou
 | **Accent Rose**   | `#D4687A`   | Dusty pink         | Title, race course, checkpoint markers, slider |
 | **Text Primary**  | `#F0EEEB`   | Warm off-white     | Main text, headings                          |
 | **Text Secondary**| `#9E9A93`   | Warm grey          | Labels, captions, secondary text             |
-| **Text Muted**    | `#6B6762`   | Muted charcoal     | Placeholders, disabled text                  |
+| **Text Muted**    | `#8A8580`   | Muted charcoal     | Placeholders, disabled text (WCAG AA 4.5:1)  |
 | **Border**        | `#2C2A27`   | Dark warm grey     | Dividers, card borders, subtle lines         |
 | **Error**         | `#EF4444`   | Red                | Error states, critical alerts                |
 | **Success**       | `#2DD4A8`   | Emerald mint (=primary) | Success feedback                        |
@@ -666,10 +673,8 @@ weather-bingo/
 │   │   │   └── ErrorBoundary.tsx
 │   │   ├── hooks/              # Custom React hooks
 │   │   │   ├── useRace.ts
-│   │   │   ├── useForecast.ts
-│   │   │   └── usePassThroughTime.ts
-│   │   ├── utils/              # Helpers (time calc, formatting)
-│   │   │   ├── pacing.ts
+│   │   │   └── useForecast.ts
+│   │   ├── utils/              # Helpers (formatting)
 │   │   │   └── formatting.ts
 │   │   └── styles/
 │   │       └── theme.ts        # Colour palette constants
@@ -734,19 +739,20 @@ The application is deployable to [Railway](https://railway.com/) as a PoC/stagin
 ]
 ```
 
-### 9.2 GET `/api/v1/races/:id`
+### 9.2 GET `/api/v1/races/:id/course`
+
+Returns the parsed course GPS track as an array of coordinate points (extracted from the stored GPX data, not the raw XML).
 
 **Response:**
 ```json
-{
-  "id": "uuid",
-  "name": "Vasaloppet",
-  "year": 2026,
-  "start_time": "2026-03-01T08:00:00+01:00",
-  "distance_km": 90.0,
-  "course_gpx": "<gpx>...</gpx>"
-}
+[
+  { "lat": 61.157, "lon": 14.352, "ele": 380.0 },
+  { "lat": 61.155, "lon": 14.348, "ele": 385.0 },
+  { "lat": 61.152, "lon": 14.340, "ele": 390.0 }
+]
 ```
+
+> **Note:** Returns 404 if the race is not found. Each element has `lat` (WGS84 latitude), `lon` (WGS84 longitude), and `ele` (elevation in metres above sea level).
 
 ### 9.3 GET `/api/v1/races/:id/checkpoints`
 
@@ -817,6 +823,8 @@ The application is deployable to [Railway](https://railway.com/) as a PoC/stagin
 ```
 
 > **Note:** `forecast_available` is `false` when the requested datetime is beyond yr.no's ~10-day forecast horizon. In this case, `weather`, `fetched_at`, `source`, and `yr_model_run_at` are all null. The `forecast_time` still reflects the originally requested time.
+
+> **Note:** The single-checkpoint endpoint returns the **full** weather object with all detail fields (wind_gust_ms, precipitation_min/max_mm, humidity_pct, dew_point_c, cloud_cover_pct, uv_index). The API uses a unified `Weather` struct with `#[serde(skip_serializing_if = "Option::is_none")]` — detail-only fields are omitted when `None` rather than using a separate simplified type.
 
 ### 9.5 GET `/api/v1/forecasts/checkpoint/:checkpoint_id/history?datetime=ISO8601`
 
@@ -894,9 +902,13 @@ The application is deployable to [Railway](https://railway.com/) as a PoC/stagin
 
 > **Note:** The race-level `yr_model_run_at` is the **oldest** (minimum) model run time across all checkpoints that have available forecasts, providing a conservative indicator of forecast freshness. The UI displays this as "Model run: {time}" in the course overview. For single-checkpoint views, `yr_model_run_at` comes directly from the individual forecast row. When all checkpoints are beyond the forecast horizon, `yr_model_run_at` is `null`.
 
+> **Note:** The race endpoint returns a **simplified** weather object — detail-only fields (wind_gust_ms, precipitation_min/max_mm, humidity_pct, dew_point_c, cloud_cover_pct, uv_index) are omitted via `#[serde(skip_serializing_if = "Option::is_none")]`. Both endpoints use the same unified `Weather` struct; the race endpoint simply sets detail fields to `None` so they are excluded from the JSON.
+
 ---
 
 ## 10. Pacing Model
+
+> **Note:** Pacing is computed **server-side only**. The API calculates `expected_time` for each checkpoint and includes it in the race forecast response. The frontend reads `expected_time` directly — there is no client-side pacing code.
 
 ### 10.1 Even Pacing (Fallback)
 

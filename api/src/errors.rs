@@ -30,11 +30,11 @@ pub enum AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, message) = match &self {
-            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
-            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
-            AppError::ExternalServiceError(msg) => (StatusCode::BAD_GATEWAY, msg.clone()),
-            AppError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.clone()),
+        let (status, message) = match self {
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::ExternalServiceError(msg) => (StatusCode::BAD_GATEWAY, msg),
+            AppError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
             AppError::DatabaseError(err) => {
                 tracing::error!("Database error: {:?}", err);
                 (

@@ -17,7 +17,7 @@ export const colors = {
   accentRose: "#D4687A",
   textPrimary: "#F0EEEB",
   textSecondary: "#9E9A93",
-  textMuted: "#6B6762",
+  textMuted: "#8A8580",
   border: "#2C2A27",
   error: "#EF4444",
   success: "#2DD4A8",
@@ -29,8 +29,6 @@ export const chartColors = {
   feelsLike: "#14B8A6",
   wind: "#7C8CF5",
   precipitation: "#F5A623",
-  humidity: "#34EBB9",
-  cloudCover: "#5A7A6E",
 } as const;
 
 // Uncertainty bands use same colour at 15% opacity

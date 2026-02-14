@@ -8,7 +8,6 @@ import CheckpointDetail from "./CheckpointDetail";
 
 const mockCheckpoint: Checkpoint = {
   id: "cp-1",
-  race_id: "race-1",
   name: "Salen",
   distance_km: 0,
   latitude: 61.16,

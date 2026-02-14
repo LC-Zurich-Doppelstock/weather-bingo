@@ -17,11 +17,6 @@ export function formatPrecip(mm: number): string {
   return `${mm.toFixed(1)} mm`;
 }
 
-/** Format distance in km. */
-export function formatDistance(km: number): string {
-  return `${Math.round(km)} km`;
-}
-
 /** Format a duration in hours to a human-readable string. */
 export function formatDuration(hours: number): string {
   const h = Math.floor(hours);

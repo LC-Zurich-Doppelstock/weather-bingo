@@ -128,7 +128,7 @@ export default function MiniTimeline({
   };
 
   return (
-    <div className="rounded-lg bg-surface-alt p-3">
+    <div className="rounded-lg bg-surface-alt p-3" role="img" aria-label="Weather timeline chart">
       <div className="mb-2 text-xs font-medium uppercase tracking-wider text-text-muted">
         Timeline
       </div>
@@ -139,13 +139,13 @@ export default function MiniTimeline({
         >
           <XAxis
             dataKey="timeLabel"
-            tick={{ fill: "#6B6762", fontSize: 10 }}
+            tick={{ fill: colors.textMuted, fontSize: 10 }}
             axisLine={{ stroke: colors.border }}
             tickLine={false}
           />
           <YAxis
             yAxisId="temp"
-            tick={{ fill: "#6B6762", fontSize: 10 }}
+            tick={{ fill: colors.textMuted, fontSize: 10 }}
             tickFormatter={(v: number) => formatTemp(v)}
             axisLine={false}
             tickLine={false}
@@ -154,7 +154,7 @@ export default function MiniTimeline({
           <YAxis
             yAxisId="precip"
             orientation="right"
-            tick={{ fill: "#6B6762", fontSize: 10 }}
+            tick={{ fill: colors.textMuted, fontSize: 10 }}
             tickFormatter={(v: number) => formatPrecip(v)}
             axisLine={false}
             tickLine={false}
@@ -164,7 +164,7 @@ export default function MiniTimeline({
           <YAxis
             yAxisId="wind"
             orientation="right"
-            tick={{ fill: "#6B6762", fontSize: 10 }}
+            tick={{ fill: colors.textMuted, fontSize: 10 }}
             tickFormatter={(v: number) => formatWind(v)}
             axisLine={false}
             tickLine={false}

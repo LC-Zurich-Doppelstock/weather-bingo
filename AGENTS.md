@@ -40,7 +40,7 @@ weather-bingo/
 - Use `sqlx` for database access with compile-time checked queries where possible.
 - Use `axum` for HTTP routing.
 - Error handling: use `thiserror` for custom error types, return proper HTTP status codes (see specs.md §4.5).
-- Tests: unit tests in `#[cfg(test)]` modules, integration tests in `tests/`, mock yr.no with `wiremock`.
+- Tests: unit tests in `#[cfg(test)]` modules. No integration tests or wiremock — expand unit tests with mock data instead.
 - Run `cargo fmt` and `cargo clippy` before committing.
 - Respect yr.no Terms of Service: always send the correct `User-Agent` header, honour `Expires` and `If-Modified-Since` headers.
 
@@ -48,6 +48,7 @@ weather-bingo/
 - Use functional components with hooks.
 - Use TanStack Query for API data fetching.
 - Style with Tailwind CSS using the project colour palette (see specs.md §5.6).
+- Import colours from `styles/theme.ts` — never hardcode hex values in components.
 - Tests: Vitest + React Testing Library for components, MSW for API mocking.
 - Run `npm run lint` and `npm run typecheck` before committing.
 - Mobile-first responsive design.
@@ -55,6 +56,7 @@ weather-bingo/
 ### Database
 - Migrations managed via `sqlx migrate`.
 - Never overwrite forecast data — every fetch creates a new row (append-only pattern).
+- Deduplication on write: `ON CONFLICT DO NOTHING` using partial unique index on `(checkpoint_id, forecast_time, yr_model_run_at) WHERE yr_model_run_at IS NOT NULL`.
 - Use UUIDs for all primary keys.
 - All timestamps must be `TIMESTAMPTZ`.
 
@@ -63,6 +65,37 @@ weather-bingo/
 - JSON responses only.
 - Return `X-Forecast-Stale: true` header when serving cached data that couldn't be refreshed.
 - Calculated fields (`feels_like_c`, `precipitation_type`) are computed by the API, not stored from yr.no.
+- Unified `Weather` struct with `#[serde(skip_serializing_if = "Option::is_none")]` — detail-only fields are omitted when `None` (race endpoint) and included when present (single-checkpoint endpoint).
+
+## Architecture
+
+### Extract-on-Read Pattern
+
+The API uses an **extract-on-read** architecture for forecast data:
+
+1. The full yr.no JSON response (~10 days of timeseries) is cached in the `yr_responses` table.
+2. When a forecast is requested, the API ensures the yr.no cache is fresh, then **extracts the relevant forecast entry in-memory** from the cached JSON.
+3. Extracted forecasts are also written to the `forecasts` table for historical tracking (append-only, deduplicated via `ON CONFLICT DO NOTHING`).
+
+This avoids the bug where new checkpoints at already-cached locations would have no forecast data, since extraction happens at read time rather than write time.
+
+### Pacing
+
+Pacing is computed **server-side only** using elevation-adjusted cost factors. The API returns `expected_time` for each checkpoint in the race forecast response. The frontend reads this directly — there is no client-side pacing code.
+
+### API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/races` | List all races |
+| GET | `/api/v1/races/:id/course` | Parsed course GPS points (lat/lon/ele array) |
+| GET | `/api/v1/races/:id/checkpoints` | All checkpoints for a race |
+| GET | `/api/v1/forecasts/checkpoint/:checkpoint_id` | Full forecast for a checkpoint |
+| GET | `/api/v1/forecasts/checkpoint/:checkpoint_id/history` | Historical forecast evolution |
+| GET | `/api/v1/forecasts/race/:race_id` | Simplified forecasts for all checkpoints |
+| GET | `/api/v1/health` | Health check |
+
+> Note: There is no `GET /api/v1/races/:id` single-race detail endpoint. Race metadata comes from the list endpoint; course data from the course endpoint.
 
 ## Colour Palette
 
@@ -79,11 +112,14 @@ The UI uses a dark theme with warm charcoal neutrals:
 | Accent Rose | `#D4687A` | Title, race course, checkpoints, slider |
 | Text Primary | `#F0EEEB` | Main text |
 | Text Secondary | `#9E9A93` | Labels, captions |
+| Text Muted | `#8A8580` | Placeholders, disabled text (WCAG AA 4.5:1) |
 | Error | `#EF4444` | Error states |
 
 ## Key Conventions
 
-- Forecast freshness threshold: 1 minute (re-fetch from yr.no if older).
-- Pacing model: even pacing (`pass_time = start + duration × distance_fraction`).
+- Forecast freshness threshold: 1 minute (re-fetch from yr.no if older, configurable via `FORECAST_STALENESS_SECS`).
+- Pacing model: elevation-adjusted (server-side only). Even pacing as fallback for flat courses.
 - yr.no endpoint: `https://api.met.no/weatherapi/locationforecast/2.0/complete`
 - User-Agent for yr.no: `WeatherBingo/0.1 github.com/LC-Zurich-Doppelstock/weather-bingo`
+- HTTP timeout for yr.no: 30 seconds.
+- Docker DB credentials: user=`wb`, password=`wb_dev`, database=`weather_bingo`.

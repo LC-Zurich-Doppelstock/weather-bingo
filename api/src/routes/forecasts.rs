@@ -49,9 +49,16 @@ pub struct RaceForecastQuery {
 // Response types — Section 9.4
 // ---------------------------------------------------------------------------
 
-/// Full weather data for a checkpoint forecast.
+/// Unified weather data for both checkpoint detail and race overview.
+///
+/// All core fields are always present. Detail-only fields (wind gusts,
+/// precipitation range, humidity, dew point, cloud cover, UV) are `Option`
+/// and omitted from JSON when `None` via `skip_serializing_if`.
+///
+/// - `Weather::full()` — sets all fields (checkpoint detail view)
+/// - `Weather::simplified()` — sets detail-only fields to `None` (race overview)
 #[derive(Debug, Serialize, ToSchema)]
-pub struct ForecastWeather {
+pub struct Weather {
     /// Air temperature in Celsius
     pub temperature_c: f64,
     /// 10th percentile temperature (uncertainty low bound)
@@ -68,30 +75,39 @@ pub struct ForecastWeather {
     pub wind_speed_percentile_90_ms: Option<f64>,
     /// Wind direction in degrees (0 = north, 90 = east)
     pub wind_direction_deg: f64,
-    /// Wind gust speed in m/s (short-range forecasts only)
+    /// Wind gust speed in m/s (detail view only)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub wind_gust_ms: Option<f64>,
     /// Precipitation amount in mm/h
     pub precipitation_mm: f64,
-    /// Minimum expected precipitation in mm/h
+    /// Minimum expected precipitation in mm/h (detail view only)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub precipitation_min_mm: Option<f64>,
-    /// Maximum expected precipitation in mm/h
+    /// Maximum expected precipitation in mm/h (detail view only)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub precipitation_max_mm: Option<f64>,
     /// Precipitation type: "snow", "rain", "sleet", or "none"
     pub precipitation_type: String,
-    /// Relative humidity percentage
-    pub humidity_pct: f64,
-    /// Dew point temperature in Celsius
-    pub dew_point_c: f64,
-    /// Cloud cover percentage
-    pub cloud_cover_pct: f64,
-    /// UV index (short-range forecasts only)
+    /// Relative humidity percentage (detail view only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub humidity_pct: Option<f64>,
+    /// Dew point temperature in Celsius (detail view only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dew_point_c: Option<f64>,
+    /// Cloud cover percentage (detail view only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cloud_cover_pct: Option<f64>,
+    /// UV index (detail view only)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub uv_index: Option<f64>,
     /// yr.no weather symbol code (e.g. "cloudy", "lightssnowshowers_day")
     pub symbol_code: String,
 }
 
-impl From<&models::Forecast> for ForecastWeather {
-    fn from(f: &models::Forecast) -> Self {
+impl Weather {
+    /// Full weather from a forecast (checkpoint detail view).
+    /// All fields populated — detail-only fields are `Some(value)`.
+    pub fn full(f: &models::Forecast) -> Self {
         Self {
             temperature_c: f.temperature_c.to_f64().unwrap_or(0.0),
             temperature_percentile_10_c: f.temperature_percentile_10_c.and_then(|v| v.to_f64()),
@@ -106,10 +122,35 @@ impl From<&models::Forecast> for ForecastWeather {
             precipitation_min_mm: f.precipitation_min_mm.and_then(|v| v.to_f64()),
             precipitation_max_mm: f.precipitation_max_mm.and_then(|v| v.to_f64()),
             precipitation_type: f.precipitation_type.clone(),
-            humidity_pct: f.humidity_pct.to_f64().unwrap_or(0.0),
-            dew_point_c: f.dew_point_c.to_f64().unwrap_or(0.0),
-            cloud_cover_pct: f.cloud_cover_pct.to_f64().unwrap_or(0.0),
+            humidity_pct: Some(f.humidity_pct.to_f64().unwrap_or(0.0)),
+            dew_point_c: Some(f.dew_point_c.to_f64().unwrap_or(0.0)),
+            cloud_cover_pct: Some(f.cloud_cover_pct.to_f64().unwrap_or(0.0)),
             uv_index: f.uv_index.and_then(|v| v.to_f64()),
+            symbol_code: f.symbol_code.clone(),
+        }
+    }
+
+    /// Simplified weather for race overview (omits detail-only fields).
+    /// Detail-only fields are `None` and will be omitted from JSON.
+    pub fn simplified(f: &models::Forecast) -> Self {
+        Self {
+            temperature_c: f.temperature_c.to_f64().unwrap_or(0.0),
+            temperature_percentile_10_c: f.temperature_percentile_10_c.and_then(|v| v.to_f64()),
+            temperature_percentile_90_c: f.temperature_percentile_90_c.and_then(|v| v.to_f64()),
+            feels_like_c: f.feels_like_c.to_f64().unwrap_or(0.0),
+            wind_speed_ms: f.wind_speed_ms.to_f64().unwrap_or(0.0),
+            wind_speed_percentile_10_ms: f.wind_speed_percentile_10_ms.and_then(|v| v.to_f64()),
+            wind_speed_percentile_90_ms: f.wind_speed_percentile_90_ms.and_then(|v| v.to_f64()),
+            wind_direction_deg: f.wind_direction_deg.to_f64().unwrap_or(0.0),
+            wind_gust_ms: None,
+            precipitation_mm: f.precipitation_mm.to_f64().unwrap_or(0.0),
+            precipitation_min_mm: None,
+            precipitation_max_mm: None,
+            precipitation_type: f.precipitation_type.clone(),
+            humidity_pct: None,
+            dew_point_c: None,
+            cloud_cover_pct: None,
+            uv_index: None,
             symbol_code: f.symbol_code.clone(),
         }
     }
@@ -139,7 +180,7 @@ pub struct ForecastResponse {
     /// Whether this forecast is stale (yr.no was unreachable, serving cached data)
     pub stale: bool,
     /// Full weather data. Null when `forecast_available` is false.
-    pub weather: Option<ForecastWeather>,
+    pub weather: Option<Weather>,
 }
 
 /// A single historical forecast entry showing weather at a previous fetch time.
@@ -151,7 +192,7 @@ pub struct ForecastHistoryEntry {
     /// Null for older rows that predate this tracking.
     pub yr_model_run_at: Option<String>,
     /// Weather data at this fetch time
-    pub weather: ForecastWeather,
+    pub weather: Weather,
 }
 
 /// Forecast history response showing how a forecast has evolved (Section 9.5).
@@ -165,33 +206,6 @@ pub struct ForecastHistoryResponse {
     pub forecast_time: String,
     /// Historical forecast entries, ordered by fetch time
     pub history: Vec<ForecastHistoryEntry>,
-}
-
-/// Simplified weather for race-level overview (Section 9.6).
-#[derive(Debug, Serialize, ToSchema)]
-pub struct RaceWeatherSimple {
-    /// Air temperature in Celsius
-    pub temperature_c: f64,
-    /// 10th percentile temperature (uncertainty low bound)
-    pub temperature_percentile_10_c: Option<f64>,
-    /// 90th percentile temperature (uncertainty high bound)
-    pub temperature_percentile_90_c: Option<f64>,
-    /// Feels-like temperature in Celsius
-    pub feels_like_c: f64,
-    /// Wind speed in m/s
-    pub wind_speed_ms: f64,
-    /// 10th percentile wind speed
-    pub wind_speed_percentile_10_ms: Option<f64>,
-    /// 90th percentile wind speed
-    pub wind_speed_percentile_90_ms: Option<f64>,
-    /// Wind direction in degrees (0 = north, 90 = east)
-    pub wind_direction_deg: f64,
-    /// Precipitation in mm/h
-    pub precipitation_mm: f64,
-    /// Precipitation type: "snow", "rain", "sleet", or "none"
-    pub precipitation_type: String,
-    /// yr.no weather symbol code
-    pub symbol_code: String,
 }
 
 /// A checkpoint with its expected weather in the race forecast (Section 9.6).
@@ -210,7 +224,7 @@ pub struct RaceForecastCheckpoint {
     pub forecast_available: bool,
     /// Simplified weather at expected pass-through time.
     /// Null when `forecast_available` is false.
-    pub weather: Option<RaceWeatherSimple>,
+    pub weather: Option<Weather>,
 }
 
 /// Full race forecast response with weather at all checkpoints (Section 9.6).
@@ -287,7 +301,7 @@ pub async fn get_checkpoint_forecast(
             yr_model_run_at: forecast.yr_model_run_at.map(|dt| dt.to_rfc3339()),
             source: Some(forecast.source.clone()),
             stale: is_stale,
-            weather: Some(ForecastWeather::from(&forecast)),
+            weather: Some(Weather::full(&forecast)),
         },
         None => ForecastResponse {
             checkpoint_id: checkpoint.id,
@@ -349,7 +363,7 @@ pub async fn get_checkpoint_forecast_history(
         .map(|f| ForecastHistoryEntry {
             fetched_at: f.fetched_at.to_rfc3339(),
             yr_model_run_at: f.yr_model_run_at.map(|dt| dt.to_rfc3339()),
-            weather: ForecastWeather::from(f),
+            weather: Weather::full(f),
         })
         .collect();
 
@@ -381,7 +395,10 @@ pub async fn get_checkpoint_forecast_history(
         RaceForecastQuery,
     ),
     responses(
-        (status = 200, description = "Race forecast with weather at all checkpoints", body = RaceForecastResponse),
+        (status = 200, description = "Race forecast with weather at all checkpoints", body = RaceForecastResponse,
+         headers(
+             ("X-Forecast-Stale" = String, description = "Set to 'true' when serving cached data because yr.no is unreachable")
+         )),
         (status = 400, description = "Invalid query parameters", body = ErrorResponse),
         (status = 404, description = "Race not found", body = ErrorResponse),
     )
@@ -390,7 +407,7 @@ pub async fn get_race_forecast(
     State(state): State<AppState>,
     Path(race_id): Path<Uuid>,
     Query(params): Query<RaceForecastQuery>,
-) -> Result<Json<RaceForecastResponse>, AppError> {
+) -> Result<(HeaderMap, Json<RaceForecastResponse>), AppError> {
     // Use lightweight query — no GPX blob
     let race = queries::get_race_summary(&state.pool, race_id)
         .await?
@@ -438,27 +455,7 @@ pub async fn get_race_forecast(
         .iter()
         .zip(resolved.iter())
         .map(|(cpwt, res)| {
-            let weather = res.forecast.as_ref().map(|f| RaceWeatherSimple {
-                temperature_c: f.temperature_c.to_f64().unwrap_or(0.0),
-                temperature_percentile_10_c: f
-                    .temperature_percentile_10_c
-                    .and_then(|v| v.to_f64()),
-                temperature_percentile_90_c: f
-                    .temperature_percentile_90_c
-                    .and_then(|v| v.to_f64()),
-                feels_like_c: f.feels_like_c.to_f64().unwrap_or(0.0),
-                wind_speed_ms: f.wind_speed_ms.to_f64().unwrap_or(0.0),
-                wind_speed_percentile_10_ms: f
-                    .wind_speed_percentile_10_ms
-                    .and_then(|v| v.to_f64()),
-                wind_speed_percentile_90_ms: f
-                    .wind_speed_percentile_90_ms
-                    .and_then(|v| v.to_f64()),
-                wind_direction_deg: f.wind_direction_deg.to_f64().unwrap_or(0.0),
-                precipitation_mm: f.precipitation_mm.to_f64().unwrap_or(0.0),
-                precipitation_type: f.precipitation_type.clone(),
-                symbol_code: f.symbol_code.clone(),
-            });
+            let weather = res.forecast.as_ref().map(Weather::simplified);
 
             RaceForecastCheckpoint {
                 checkpoint_id: cpwt.checkpoint.id,
@@ -480,11 +477,20 @@ pub async fn get_race_forecast(
         .min()
         .map(|dt| dt.to_rfc3339());
 
-    Ok(Json(RaceForecastResponse {
-        race_id: race.id,
-        race_name: race.name,
-        target_duration_hours: params.target_duration_hours,
-        yr_model_run_at,
-        checkpoints: checkpoint_forecasts,
-    }))
+    let any_stale = resolved.iter().any(|r| r.is_stale);
+    let mut headers = HeaderMap::new();
+    if any_stale {
+        headers.insert("X-Forecast-Stale", "true".parse().unwrap());
+    }
+
+    Ok((
+        headers,
+        Json(RaceForecastResponse {
+            race_id: race.id,
+            race_name: race.name,
+            target_duration_hours: params.target_duration_hours,
+            yr_model_run_at,
+            checkpoints: checkpoint_forecasts,
+        }),
+    ))
 }

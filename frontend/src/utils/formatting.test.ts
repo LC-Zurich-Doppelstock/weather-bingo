@@ -3,7 +3,6 @@ import {
   formatTemp,
   formatWind,
   formatPrecip,
-  formatDistance,
   formatDuration,
   windDirectionLabel,
   formatPercent,
@@ -37,12 +36,6 @@ describe("formatWind", () => {
 describe("formatPrecip", () => {
   it("formats precipitation with one decimal", () => {
     expect(formatPrecip(0.4)).toBe("0.4 mm");
-  });
-});
-
-describe("formatDistance", () => {
-  it("formats distance rounded to integer", () => {
-    expect(formatDistance(11.3)).toBe("11 km");
   });
 });
 

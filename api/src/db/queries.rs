@@ -139,61 +139,6 @@ pub async fn get_yr_cached_response(
     .await
 }
 
-/// Lightweight check: is a non-expired yr.no cached response available?
-/// Returns true/false without transferring the large raw_response blob.
-pub async fn is_yr_cache_valid(
-    pool: &PgPool,
-    latitude: Decimal,
-    longitude: Decimal,
-    elevation_m: Decimal,
-) -> Result<bool, sqlx::Error> {
-    let row: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 as exists_flag
-         FROM yr_responses
-         WHERE latitude = $1 AND longitude = $2 AND elevation_m = $3
-           AND expires_at > NOW()
-         LIMIT 1",
-    )
-    .bind(latitude)
-    .bind(longitude)
-    .bind(elevation_m)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.is_some())
-}
-
-/// Batch check: which of the given locations have valid (non-expired) yr.no cache?
-/// Returns the set of (latitude, longitude, elevation_m) tuples that are valid.
-/// Executes as a single query regardless of how many locations are checked.
-pub async fn get_valid_yr_cache_locations(
-    pool: &PgPool,
-    locations: &[(Decimal, Decimal, Decimal)],
-) -> Result<Vec<(Decimal, Decimal, Decimal)>, sqlx::Error> {
-    if locations.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let lats: Vec<Decimal> = locations.iter().map(|(l, _, _)| *l).collect();
-    let lons: Vec<Decimal> = locations.iter().map(|(_, l, _)| *l).collect();
-    let eles: Vec<Decimal> = locations.iter().map(|(_, _, e)| *e).collect();
-
-    let rows: Vec<(Decimal, Decimal, Decimal)> = sqlx::query_as(
-        "SELECT yr.latitude, yr.longitude, yr.elevation_m
-         FROM yr_responses yr
-         INNER JOIN UNNEST($1::numeric[], $2::numeric[], $3::numeric[])
-           AS loc(lat, lon, ele)
-           ON yr.latitude = loc.lat AND yr.longitude = loc.lon AND yr.elevation_m = loc.ele
-         WHERE yr.expires_at > NOW()",
-    )
-    .bind(&lats)
-    .bind(&lons)
-    .bind(&eles)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows)
-}
-
 /// Get a cached yr.no response for a location regardless of expiry (for If-Modified-Since).
 pub async fn get_yr_cached_response_any(
     pool: &PgPool,
@@ -205,13 +150,37 @@ pub async fn get_yr_cached_response_any(
         "SELECT id, latitude, longitude, elevation_m, fetched_at, expires_at,
                 last_modified, raw_response, created_at
          FROM yr_responses
-         WHERE latitude = $1 AND longitude = $2 AND elevation_m = $3",
+         WHERE latitude = $1 AND longitude = $2 AND elevation_m = $3
+         LIMIT 1",
     )
     .bind(latitude)
     .bind(longitude)
     .bind(elevation_m)
     .fetch_optional(pool)
     .await
+}
+
+/// Update only the expires_at on an existing yr.no cached response.
+/// Much cheaper than upserting the full raw_response JSON blob — used when
+/// yr.no returns 304 Not Modified (data unchanged, just bump the TTL).
+pub async fn update_yr_cache_expiry(
+    pool: &PgPool,
+    latitude: Decimal,
+    longitude: Decimal,
+    elevation_m: Decimal,
+    expires_at: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE yr_responses SET expires_at = $4
+         WHERE latitude = $1 AND longitude = $2 AND elevation_m = $3",
+    )
+    .bind(latitude)
+    .bind(longitude)
+    .bind(elevation_m)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Upsert (insert or update) a yr.no cached response for a location.
@@ -418,45 +387,16 @@ pub async fn get_forecast_history(
         .await
 }
 
-/// Check if a forecast already exists for this (checkpoint, forecast_time, model_run).
-/// Used for deduplication: re-fetching the same yr.no model run should not create
-/// duplicate rows. If `yr_model_run_at` is None, always returns false (no dedup
-/// possible without model run info).
+/// Insert a single forecast record, deduplicating by
+/// `(checkpoint_id, forecast_time, yr_model_run_at)`.
 ///
-/// Note: With the new bulk-insert architecture, deduplication is handled by
-/// the unique index + ON CONFLICT DO NOTHING. Retained for potential future use.
-#[allow(dead_code)]
-pub async fn forecast_exists_for_model_run(
-    pool: &PgPool,
-    checkpoint_id: Uuid,
-    forecast_time: DateTime<Utc>,
-    yr_model_run_at: Option<DateTime<Utc>>,
-) -> Result<bool, sqlx::Error> {
-    let Some(model_run) = yr_model_run_at else {
-        return Ok(false);
-    };
-    let row: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 as exists_flag
-         FROM forecasts
-         WHERE checkpoint_id = $1
-           AND forecast_time = $2
-           AND yr_model_run_at = $3
-         LIMIT 1",
-    )
-    .bind(checkpoint_id)
-    .bind(forecast_time)
-    .bind(model_run)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.is_some())
-}
-
-/// Insert a new forecast record (append-only). No longer stores raw_response
-/// (that lives in yr_responses now).
+/// Uses `ON CONFLICT DO NOTHING` so re-inserting the same yr.no time slot
+/// from the same model run is a no-op. Returns `Some(Forecast)` when a new
+/// row was inserted, or `None` when it already existed.
 pub async fn insert_forecast(
     pool: &PgPool,
-    params: InsertForecastParams,
-) -> Result<Forecast, sqlx::Error> {
+    p: InsertForecastParams,
+) -> Result<Option<Forecast>, sqlx::Error> {
     sqlx::query_as::<_, Forecast>(
         "INSERT INTO forecasts (
             id, checkpoint_id, forecast_time, fetched_at, source,
@@ -465,122 +405,49 @@ pub async fn insert_forecast(
             wind_direction_deg, wind_gust_ms,
             precipitation_mm, precipitation_min_mm, precipitation_max_mm,
             humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-            feels_like_c, precipitation_type, yr_model_run_at, created_at
-        ) VALUES (
-            $1, $2, $3, $4, $5,
-            $6, $7, $8, $9, $10, $11, $12, $13,
-            $14, $15, $16, $17, $18, $19, $20, $21,
-            $22, $23, $24, NOW()
-        )
-        RETURNING id, checkpoint_id, forecast_time, fetched_at, source,
-                  temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
-                  wind_speed_ms, wind_speed_percentile_10_ms, wind_speed_percentile_90_ms,
-                  wind_direction_deg, wind_gust_ms,
-                  precipitation_mm, precipitation_min_mm, precipitation_max_mm,
-                  humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-                  feels_like_c, precipitation_type, yr_model_run_at, created_at",
+            feels_like_c, precipitation_type, yr_model_run_at
+         ) VALUES (
+            gen_random_uuid(), $1, $2, $3, $4,
+            $5, $6, $7, $8, $9, $10, $11, $12,
+            $13, $14, $15, $16, $17, $18, $19, $20,
+            $21, $22, $23
+         )
+         ON CONFLICT (checkpoint_id, forecast_time, yr_model_run_at)
+            WHERE yr_model_run_at IS NOT NULL
+         DO NOTHING
+         RETURNING id, checkpoint_id, forecast_time, fetched_at, source,
+                   temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
+                   wind_speed_ms, wind_speed_percentile_10_ms, wind_speed_percentile_90_ms,
+                   wind_direction_deg, wind_gust_ms,
+                   precipitation_mm, precipitation_min_mm, precipitation_max_mm,
+                   humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
+                   feels_like_c, precipitation_type, yr_model_run_at, created_at",
     )
-    .bind(Uuid::new_v4())
-    .bind(params.checkpoint_id)
-    .bind(params.forecast_time)
-    .bind(params.fetched_at)
-    .bind(&params.source)
-    .bind(params.temperature_c)
-    .bind(params.temperature_percentile_10_c)
-    .bind(params.temperature_percentile_90_c)
-    .bind(params.wind_speed_ms)
-    .bind(params.wind_speed_percentile_10_ms)
-    .bind(params.wind_speed_percentile_90_ms)
-    .bind(params.wind_direction_deg)
-    .bind(params.wind_gust_ms)
-    .bind(params.precipitation_mm)
-    .bind(params.precipitation_min_mm)
-    .bind(params.precipitation_max_mm)
-    .bind(params.humidity_pct)
-    .bind(params.dew_point_c)
-    .bind(params.cloud_cover_pct)
-    .bind(params.uv_index)
-    .bind(&params.symbol_code)
-    .bind(params.feels_like_c)
-    .bind(&params.precipitation_type)
-    .bind(params.yr_model_run_at)
-    .fetch_one(pool)
+    .bind(p.checkpoint_id)
+    .bind(p.forecast_time)
+    .bind(p.fetched_at)
+    .bind(&p.source)
+    .bind(p.temperature_c)
+    .bind(p.temperature_percentile_10_c)
+    .bind(p.temperature_percentile_90_c)
+    .bind(p.wind_speed_ms)
+    .bind(p.wind_speed_percentile_10_ms)
+    .bind(p.wind_speed_percentile_90_ms)
+    .bind(p.wind_direction_deg)
+    .bind(p.wind_gust_ms)
+    .bind(p.precipitation_mm)
+    .bind(p.precipitation_min_mm)
+    .bind(p.precipitation_max_mm)
+    .bind(p.humidity_pct)
+    .bind(p.dew_point_c)
+    .bind(p.cloud_cover_pct)
+    .bind(p.uv_index)
+    .bind(&p.symbol_code)
+    .bind(p.feels_like_c)
+    .bind(&p.precipitation_type)
+    .bind(p.yr_model_run_at)
+    .fetch_optional(pool)
     .await
-}
-
-/// Bulk insert forecast records for a checkpoint from parsed yr.no timeseries.
-///
-/// Uses `ON CONFLICT DO NOTHING` on the deduplication index
-/// (checkpoint_id, forecast_time, yr_model_run_at) to skip rows that already
-/// exist for the same model run. Returns the number of rows actually inserted.
-///
-/// Note: With the targeted extraction architecture, `insert_forecast` is
-/// preferred (one row per request). Retained for potential future use.
-#[allow(dead_code)]
-pub async fn bulk_insert_forecasts(
-    pool: &PgPool,
-    params: &[InsertForecastParams],
-) -> Result<u64, sqlx::Error> {
-    if params.is_empty() {
-        return Ok(0);
-    }
-
-    // Build a batch of individual INSERTs wrapped in a single transaction.
-    // This is simpler and more maintainable than building a multi-row VALUES clause.
-    let mut tx = pool.begin().await?;
-    let mut inserted = 0u64;
-
-    for p in params {
-        let result = sqlx::query(
-            "INSERT INTO forecasts (
-                id, checkpoint_id, forecast_time, fetched_at, source,
-                temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
-                wind_speed_ms, wind_speed_percentile_10_ms, wind_speed_percentile_90_ms,
-                wind_direction_deg, wind_gust_ms,
-                precipitation_mm, precipitation_min_mm, precipitation_max_mm,
-                humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-                feels_like_c, precipitation_type, yr_model_run_at, created_at
-            ) VALUES (
-                $1, $2, $3, $4, $5,
-                $6, $7, $8, $9, $10, $11, $12, $13,
-                $14, $15, $16, $17, $18, $19, $20, $21,
-                $22, $23, $24, NOW()
-            )
-            ON CONFLICT (checkpoint_id, forecast_time, yr_model_run_at)
-                WHERE yr_model_run_at IS NOT NULL
-            DO NOTHING",
-        )
-        .bind(Uuid::new_v4())
-        .bind(p.checkpoint_id)
-        .bind(p.forecast_time)
-        .bind(p.fetched_at)
-        .bind(&p.source)
-        .bind(p.temperature_c)
-        .bind(p.temperature_percentile_10_c)
-        .bind(p.temperature_percentile_90_c)
-        .bind(p.wind_speed_ms)
-        .bind(p.wind_speed_percentile_10_ms)
-        .bind(p.wind_speed_percentile_90_ms)
-        .bind(p.wind_direction_deg)
-        .bind(p.wind_gust_ms)
-        .bind(p.precipitation_mm)
-        .bind(p.precipitation_min_mm)
-        .bind(p.precipitation_max_mm)
-        .bind(p.humidity_pct)
-        .bind(p.dew_point_c)
-        .bind(p.cloud_cover_pct)
-        .bind(p.uv_index)
-        .bind(&p.symbol_code)
-        .bind(p.feels_like_c)
-        .bind(&p.precipitation_type)
-        .bind(p.yr_model_run_at)
-        .execute(&mut *tx)
-        .await?;
-        inserted += result.rows_affected();
-    }
-
-    tx.commit().await?;
-    Ok(inserted)
 }
 
 /// Get a single checkpoint by ID.

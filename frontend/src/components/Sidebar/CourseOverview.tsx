@@ -13,7 +13,7 @@ import {
 } from "recharts";
 import type { CategoricalChartState } from "recharts/types/chart/types";
 import type { Checkpoint, RaceForecastResponse } from "../../api/types";
-import { chartColors, uncertaintyOpacity } from "../../styles/theme";
+import { chartColors, colors, uncertaintyOpacity } from "../../styles/theme";
 import { formatTemp, formatWind, formatPrecip, windDirectionLabel, formatTimeWithZone } from "../../utils/formatting";
 
 interface CourseOverviewProps {
@@ -74,6 +74,7 @@ const CourseOverview = memo(function CourseOverview({
     return raceForecast.checkpoints
       .filter((cp) => cp.weather !== null)
       .map((cp) => {
+        // Safe: we just filtered for non-null weather above
         const w = cp.weather!;
         return {
           checkpointId: cp.checkpoint_id,
@@ -132,11 +133,11 @@ const CourseOverview = memo(function CourseOverview({
 
   if (isLoading) {
     return (
-      <div className="space-y-4 p-4">
+      <div className="space-y-4 p-4" aria-busy="true">
         <h2 className="text-lg font-bold text-text-primary">
           Weather Along the Course
         </h2>
-        <div className="space-y-6">
+        <div className="space-y-6" role="status" aria-label="Loading forecast data">
           {[...Array(3)].map((_, i) => (
             <div
               key={i}
@@ -147,6 +148,8 @@ const CourseOverview = memo(function CourseOverview({
       </div>
     );
   }
+
+  if (!raceForecast) return null;
 
   if (data.length === 0) {
     return (
@@ -176,12 +179,15 @@ const CourseOverview = memo(function CourseOverview({
   const hasWindBands = data.some((d) => d.windP10 !== null && d.windP90 !== null);
 
   const tooltipStyle = {
-    backgroundColor: "#171614",
-    border: "1px solid #2C2A27",
+    backgroundColor: colors.surface,
+    border: `1px solid ${colors.border}`,
     borderRadius: "6px",
-    color: "#F0EEEB",
+    color: colors.textPrimary,
     fontSize: "12px",
   };
+
+  const tickStyle = { fill: colors.textMuted, fontSize: 10 };
+  const axisLineStyle = { stroke: colors.border };
 
   return (
     <div className="space-y-1 p-4">
@@ -189,12 +195,12 @@ const CourseOverview = memo(function CourseOverview({
         Weather Along the Course
       </h2>
       <p className="text-xs text-text-muted">
-        {raceForecast!.race_name} &middot;{" "}
-        {raceForecast!.target_duration_hours}h target
+        {raceForecast.race_name} &middot;{" "}
+        {raceForecast.target_duration_hours}h target
       </p>
-      {raceForecast!.yr_model_run_at && (
+      {raceForecast.yr_model_run_at && (
         <p className="text-xs text-text-muted">
-          Model run: {formatTimeWithZone(raceForecast!.yr_model_run_at)}
+          Model run: {formatTimeWithZone(raceForecast.yr_model_run_at)}
         </p>
       )}
 
@@ -212,15 +218,16 @@ const CourseOverview = memo(function CourseOverview({
             margin={{ top: 5, right: 5, bottom: 5, left: 0 }}
             onMouseMove={handleChartMouseMove}
             onMouseLeave={handleChartMouseLeave}
-          >            <XAxis
+          >
+            <XAxis
               dataKey="distance"
-              tick={{ fill: "#6B6762", fontSize: 10 }}
+              tick={tickStyle}
               tickFormatter={(v: number) => `${v}`}
-              axisLine={{ stroke: "#2C2A27" }}
+              axisLine={axisLineStyle}
               tickLine={false}
             />
             <YAxis
-              tick={{ fill: "#6B6762", fontSize: 10 }}
+              tick={tickStyle}
               tickFormatter={(v: number) => formatTemp(v)}
               axisLine={false}
               tickLine={false}
@@ -229,16 +236,16 @@ const CourseOverview = memo(function CourseOverview({
             <Tooltip
               contentStyle={tooltipStyle}
               formatter={(value: number | [number, number], name: string) => {
-                if (name === "Temp p10–p90") {
+                if (name === "Temp p10-p90") {
                   const range = value as [number, number];
-                  return [`${formatTemp(range[0])} to ${formatTemp(range[1])}`, "Temp p10–p90"];
+                  return [`${formatTemp(range[0])} to ${formatTemp(range[1])}`, "Temp p10-p90"];
                 }
                 return [formatTemp(value as number), name];
               }}
               labelFormatter={(v: number) => `${v} km`}
             />
-            <ReferenceLine y={0} stroke="#2C2A27" strokeDasharray="3 3" />
-            <ReferenceLine x={hoveredDistance ?? 0} stroke="#D4687A" strokeDasharray="3 3" strokeWidth={1} strokeOpacity={hoveredDistance != null ? 1 : 0} ifOverflow="hidden" />
+            <ReferenceLine y={0} stroke={colors.border} strokeDasharray="3 3" />
+            <ReferenceLine x={hoveredDistance ?? 0} stroke={colors.accentRose} strokeDasharray="3 3" strokeWidth={1} strokeOpacity={hoveredDistance != null ? 1 : 0} ifOverflow="hidden" />
             {hasTempBands && (
               <Area
                 type="monotone"
@@ -246,7 +253,7 @@ const CourseOverview = memo(function CourseOverview({
                 fill={chartColors.temperature}
                 fillOpacity={uncertaintyOpacity}
                 stroke="none"
-                name="Temp p10–p90"
+                name="Temp p10-p90"
                 connectNulls
                 activeDot={false}
               />
@@ -285,13 +292,13 @@ const CourseOverview = memo(function CourseOverview({
           >
             <XAxis
               dataKey="distance"
-              tick={{ fill: "#6B6762", fontSize: 10 }}
+              tick={tickStyle}
               tickFormatter={(v: number) => `${v}`}
-              axisLine={{ stroke: "#2C2A27" }}
+              axisLine={axisLineStyle}
               tickLine={false}
             />
             <YAxis
-              tick={{ fill: "#6B6762", fontSize: 10 }}
+              tick={tickStyle}
               tickFormatter={(v: number) => formatPrecip(v)}
               axisLine={false}
               tickLine={false}
@@ -302,7 +309,7 @@ const CourseOverview = memo(function CourseOverview({
               formatter={(value: number) => [formatPrecip(value), ""]}
               labelFormatter={(v: number) => `${v} km`}
             />
-            <ReferenceLine x={hoveredDistance ?? 0} stroke="#D4687A" strokeDasharray="3 3" strokeWidth={1} strokeOpacity={hoveredDistance != null ? 1 : 0} ifOverflow="hidden" />
+            <ReferenceLine x={hoveredDistance ?? 0} stroke={colors.accentRose} strokeDasharray="3 3" strokeWidth={1} strokeOpacity={hoveredDistance != null ? 1 : 0} ifOverflow="hidden" />
             <Bar
               dataKey="precipitation"
               fill={chartColors.precipitation}
@@ -324,13 +331,13 @@ const CourseOverview = memo(function CourseOverview({
           >
             <XAxis
               dataKey="distance"
-              tick={{ fill: "#6B6762", fontSize: 10 }}
+              tick={tickStyle}
               tickFormatter={(v: number) => `${v} km`}
-              axisLine={{ stroke: "#2C2A27" }}
+              axisLine={axisLineStyle}
               tickLine={false}
             />
             <YAxis
-              tick={{ fill: "#6B6762", fontSize: 10 }}
+              tick={tickStyle}
               tickFormatter={(v: number) => formatWind(v)}
               axisLine={false}
               tickLine={false}
@@ -339,16 +346,16 @@ const CourseOverview = memo(function CourseOverview({
             <Tooltip
               contentStyle={tooltipStyle}
               formatter={(value: number | [number, number], _name: string, props: { payload?: ChartDataPoint }) => {
-                if (_name === "Wind p10–p90") {
+                if (_name === "Wind p10-p90") {
                   const range = value as [number, number];
-                  return [`${formatWind(range[0])} to ${formatWind(range[1])}`, "Wind p10–p90"];
+                  return [`${formatWind(range[0])} to ${formatWind(range[1])}`, "Wind p10-p90"];
                 }
                 const dir = props.payload?.windDirection ?? "";
                 return [`${formatWind(value as number)} ${dir}`, "Wind"];
               }}
               labelFormatter={(v: number) => `${v} km`}
             />
-            <ReferenceLine x={hoveredDistance ?? 0} stroke="#D4687A" strokeDasharray="3 3" strokeWidth={1} strokeOpacity={hoveredDistance != null ? 1 : 0} ifOverflow="hidden" />
+            <ReferenceLine x={hoveredDistance ?? 0} stroke={colors.accentRose} strokeDasharray="3 3" strokeWidth={1} strokeOpacity={hoveredDistance != null ? 1 : 0} ifOverflow="hidden" />
             {hasWindBands && (
               <Area
                 type="monotone"
@@ -356,7 +363,7 @@ const CourseOverview = memo(function CourseOverview({
                 fill={chartColors.wind}
                 fillOpacity={uncertaintyOpacity}
                 stroke="none"
-                name="Wind p10–p90"
+                name="Wind p10-p90"
                 connectNulls
                 activeDot={false}
               />
@@ -374,7 +381,7 @@ const CourseOverview = memo(function CourseOverview({
                   x={x}
                   y={y - 8}
                   textAnchor="middle"
-                  fill="#9E9A93"
+                  fill={colors.textSecondary}
                   fontSize={9}
                 >
                   {data[index]?.windDirection}
@@ -401,7 +408,7 @@ function SparklineSection({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-lg bg-surface-alt p-3">
+    <div className="rounded-lg bg-surface-alt p-3" role="img" aria-label={`${title} chart`}>
       <div className="mb-2 flex items-baseline justify-between">
         <span className="text-xs font-medium uppercase tracking-wider text-text-muted">
           {title}

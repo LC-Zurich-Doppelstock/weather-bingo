@@ -17,7 +17,6 @@ export interface CoursePoint {
 
 export interface Checkpoint {
   id: string;
-  race_id: string;
   name: string;
   distance_km: number;
   latitude: number;
@@ -26,6 +25,7 @@ export interface Checkpoint {
   sort_order: number;
 }
 
+/** Unified weather data. Detail-only fields are optional (absent in race overview). */
 export interface ForecastWeather {
   temperature_c: number;
   temperature_percentile_10_c: number | null;
@@ -35,15 +35,22 @@ export interface ForecastWeather {
   wind_speed_percentile_10_ms: number | null;
   wind_speed_percentile_90_ms: number | null;
   wind_direction_deg: number;
-  wind_gust_ms: number | null;
+  /** Detail view only — absent in race overview. */
+  wind_gust_ms?: number | null;
   precipitation_mm: number;
-  precipitation_min_mm: number | null;
-  precipitation_max_mm: number | null;
+  /** Detail view only — absent in race overview. */
+  precipitation_min_mm?: number | null;
+  /** Detail view only — absent in race overview. */
+  precipitation_max_mm?: number | null;
   precipitation_type: string;
-  humidity_pct: number;
-  dew_point_c: number;
-  cloud_cover_pct: number;
-  uv_index: number | null;
+  /** Detail view only — absent in race overview. */
+  humidity_pct?: number;
+  /** Detail view only — absent in race overview. */
+  dew_point_c?: number;
+  /** Detail view only — absent in race overview. */
+  cloud_cover_pct?: number;
+  /** Detail view only — absent in race overview. */
+  uv_index?: number | null;
   symbol_code: string;
 }
 
@@ -72,26 +79,15 @@ export interface ForecastHistoryResponse {
   history: ForecastHistoryEntry[];
 }
 
-/** Simplified weather for race-level overview. */
+/** Simplified weather for race-level overview. Uses the unified ForecastWeather type
+ *  (detail-only fields will be absent). */
 export interface RaceForecastCheckpoint {
   checkpoint_id: string;
   name: string;
   distance_km: number;
   expected_time: string; // ISO 8601
   forecast_available: boolean;
-  weather: {
-    temperature_c: number;
-    temperature_percentile_10_c: number | null;
-    temperature_percentile_90_c: number | null;
-    feels_like_c: number;
-    wind_speed_ms: number;
-    wind_speed_percentile_10_ms: number | null;
-    wind_speed_percentile_90_ms: number | null;
-    wind_direction_deg: number;
-    precipitation_mm: number;
-    precipitation_type: string;
-    symbol_code: string;
-  } | null; // null when beyond yr.no forecast horizon
+  weather: ForecastWeather | null; // null when beyond yr.no forecast horizon
 }
 
 export interface RaceForecastResponse {

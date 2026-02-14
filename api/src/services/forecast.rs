@@ -1,11 +1,15 @@
-//! Forecast resolution service.
+//! Forecast resolution service — extract-on-read architecture.
 //!
-//! Extracts only the forecast entry closest to the requested pass-through time
-//! from yr.no's timeseries response, and stores it in the forecasts table.
+//! Ensures the yr.no cache (yr_responses table) is fresh, then extracts
+//! forecast data in-memory from the cached JSON. This avoids the bug where
+//! a valid yr.no cache didn't have extracted forecasts for new checkpoints.
+//!
+//! Flow: request → ensure yr.no cache fresh → extract from cached JSON
+//!       in-memory → respond (+ write to forecasts table for history).
 //!
 //! Performance-optimised: uses yr_responses cache (keyed by location) with
 //! yr.no's Expires header for freshness, If-Modified-Since for conditional
-//! requests. Only the relevant forecast(s) are extracted and stored per request.
+//! requests.
 
 use chrono::{DateTime, Duration, Utc};
 use rust_decimal::prelude::ToPrimitive;
@@ -212,29 +216,24 @@ struct LocationKey {
     elevation_m: Decimal,
 }
 
-/// Ensure we have a valid (non-expired) yr.no timeseries for a given location,
-/// and extract + store only the forecast entries for the requested times.
+/// Ensure the yr.no cache is fresh for a given location. Does NOT extract forecasts.
 ///
-/// `targets` is a list of `(checkpoint_id, forecast_time)` pairs — one forecast
-/// entry will be extracted from the yr.no response for each pair (snapped to the
-/// nearest yr.no time slot).
+/// Returns the cached raw_response JSON (either still-valid cache or just-fetched).
+/// Callers extract forecast data in-memory from the returned JSON (extract-on-read).
 ///
-/// Returns `Ok(true)` if fresh data was fetched and stored, `Ok(false)` if
-/// the cache was still valid (no new data needed).
-async fn ensure_yr_timeseries(
+/// This fixes the cache-valid-but-no-extracted-forecast bug: previously, when the
+/// cache was still valid, the old function returned immediately without extracting
+/// forecasts for new checkpoints at already-cached locations.
+async fn ensure_yr_cache_fresh(
     pool: &PgPool,
     yr_client: &YrClient,
     lat_dec: Decimal,
     lon_dec: Decimal,
     ele_dec: Decimal,
-    targets: &[(Uuid, DateTime<Utc>)],
-) -> Result<bool, AppError> {
+) -> Result<serde_json::Value, AppError> {
     // 1. Check for a non-expired cached response
-    if queries::get_yr_cached_response(pool, lat_dec, lon_dec, ele_dec)
-        .await?
-        .is_some()
-    {
-        return Ok(false);
+    if let Some(cached) = queries::get_yr_cached_response(pool, lat_dec, lon_dec, ele_dec).await? {
+        return Ok(cached.raw_response);
     }
 
     // 2. Cache miss or expired — try conditional request with If-Modified-Since
@@ -271,48 +270,15 @@ async fn ensure_yr_timeseries(
             )
             .await?;
 
-            // Extract only the forecast entries for the requested times
-            let forecast_times: Vec<DateTime<Utc>> =
-                targets.iter().map(|(_, ft)| *ft).collect();
-            let parsed = extract_forecasts_at_times(&raw_json, &forecast_times)?;
-            let now = Utc::now();
-
-            for (i, (cp_id, target_time)) in targets.iter().enumerate() {
-                if let Some(ref forecast) = parsed[i] {
-                    let params = build_single_insert_params(*cp_id, forecast, now);
-                    queries::insert_forecast(pool, params).await?;
-                    tracing::debug!(
-                        "Inserted forecast for checkpoint {} at {}",
-                        cp_id,
-                        forecast.forecast_time,
-                    );
-                } else {
-                    tracing::debug!(
-                        "No in-range yr.no data for checkpoint {} at {} — skipping insert",
-                        cp_id,
-                        target_time,
-                    );
-                }
-            }
-
-            Ok(true)
+            Ok(raw_json)
         }
         YrTimeseriesResult::NotModified => {
-            // yr.no says data unchanged — bump the expires_at on the existing cache
             if let Some(cached) = existing {
+                // Just bump expires_at — don't re-write the full JSON blob
                 let new_expires = Utc::now() + Duration::hours(1);
-                queries::upsert_yr_cached_response(
-                    pool,
-                    lat_dec,
-                    lon_dec,
-                    ele_dec,
-                    cached.fetched_at,
-                    new_expires,
-                    cached.last_modified.as_deref(),
-                    &cached.raw_response,
-                )
-                .await?;
-                Ok(false)
+                queries::update_yr_cache_expiry(pool, lat_dec, lon_dec, ele_dec, new_expires)
+                    .await?;
+                Ok(cached.raw_response)
             } else {
                 Err(AppError::ExternalServiceError(
                     "yr.no returned 304 but no cached data exists".to_string(),
@@ -363,11 +329,12 @@ fn build_single_insert_params(
     }
 }
 
-/// Resolve the forecast for a single checkpoint.
+/// Resolve the forecast for a single checkpoint (extract-on-read).
 ///
-/// Ensures the yr.no timeseries is fresh (extracts and inserts only the
-/// targeted forecast entry if new data), then queries the DB for the nearest
-/// stored forecast to the requested time.
+/// 1. Ensures the yr.no cache is fresh for the checkpoint's location.
+/// 2. Extracts the forecast from the cached JSON in-memory.
+/// 3. Writes to the forecasts table for history (ON CONFLICT DO NOTHING).
+/// 4. Re-queries the DB for the canonical forecast row.
 ///
 /// Returns `(Some(forecast), is_stale)` when a forecast is available, or
 /// `(None, false)` when yr.no doesn't cover the requested time (e.g. race
@@ -377,59 +344,50 @@ pub async fn resolve_forecast(
     yr_client: &YrClient,
     checkpoint: &Checkpoint,
     forecast_time: DateTime<Utc>,
-    staleness_secs: u64,
+    _staleness_secs: u64,
 ) -> Result<(Option<Forecast>, bool), AppError> {
-    // Step 1: Check DB for cached forecast while yr cache is valid
-    let cached = queries::get_latest_forecast(pool, checkpoint.id, forecast_time).await?;
-
-    if let Some(ref forecast) = cached {
-        let yr_valid = queries::is_yr_cache_valid(
-            pool,
-            checkpoint.latitude,
-            checkpoint.longitude,
-            checkpoint.elevation_m,
-        )
-        .await?;
-
-        if yr_valid {
-            return Ok((Some(forecast.clone()), false));
-        }
-
-        // Fallback: staleness check
-        let age = Utc::now() - forecast.fetched_at;
-        if age.num_seconds() < staleness_secs as i64 {
-            return Ok((Some(forecast.clone()), false));
-        }
-    }
-
-    // Step 2: Ensure yr.no timeseries is fresh + insert targeted forecast
-    match ensure_yr_timeseries(
+    // Step 1: Try to get fresh yr.no data
+    let raw_json = match ensure_yr_cache_fresh(
         pool,
         yr_client,
         checkpoint.latitude,
         checkpoint.longitude,
         checkpoint.elevation_m,
-        &[(checkpoint.id, forecast_time)],
     )
     .await
     {
-        Ok(_) => {
-            // Query DB for the nearest stored forecast.
-            // If Nothing was inserted (out-of-range), this returns None — that's OK.
+        Ok(json) => json,
+        Err(e) => {
+            // yr.no failed — fall back to cached forecast from DB
+            let cached = queries::get_latest_forecast(pool, checkpoint.id, forecast_time).await?;
+            if let Some(forecast) = cached {
+                tracing::warn!("yr.no unavailable, returning stale data: {}", e);
+                return Ok((Some(forecast), true));
+            }
+            return Err(AppError::ExternalServiceError(format!(
+                "yr.no unavailable and no cached data: {}",
+                e
+            )));
+        }
+    };
+
+    // Step 2: Extract forecast from cached JSON in-memory (extract-on-read)
+    let parsed = extract_forecasts_at_times(raw_json, &[forecast_time])?;
+    let maybe_parsed = parsed.into_iter().next().flatten();
+
+    match maybe_parsed {
+        Some(ref forecast_data) => {
+            // Step 3: Write to forecasts table for history (ON CONFLICT DO NOTHING)
+            let params = build_single_insert_params(checkpoint.id, forecast_data, Utc::now());
+            let _ = queries::insert_forecast(pool, params).await?;
+
+            // Step 4: Re-query DB for the canonical forecast row
             let forecast = queries::get_latest_forecast(pool, checkpoint.id, forecast_time).await?;
             Ok((forecast, false))
         }
-        Err(e) => {
-            // yr.no failed — return stale cache if available
-            if let Some(forecast) = cached {
-                tracing::warn!("yr.no unavailable, returning stale data: {}", e);
-                Ok((Some(forecast), true))
-            } else {
-                Err(AppError::ExternalServiceError(format!(
-                    "yr.no unavailable and no cached data: {}",
-                    e
-                )))
-            }
+        None => {
+            // Beyond yr.no horizon — no forecast available for this time
+            Ok((None, false))
         }
     }
 }
@@ -450,105 +408,38 @@ pub struct ResolvedForecast {
     pub is_stale: bool,
 }
 
-/// Resolve forecasts for multiple checkpoints in a race, efficiently.
+/// Resolve forecasts for multiple checkpoints in a race — extract-on-read.
 ///
-/// Targeted extraction: only the forecast entry closest to each checkpoint's
-/// pacing-derived pass-through time is extracted from yr.no and stored.
-///   1. One query to fetch the latest forecast for ALL checkpoints (nearest to pacing time)
-///   2. One query to check yr.no cache validity for ALL locations
-///   3. Only for stale/missing: parallel yr.no fetches + targeted extraction + insert
-///   4. Re-query DB for any checkpoints that needed fresh data
+/// 1. Group checkpoints by location (yr.no grid coordinate)
+/// 2. `ensure_yr_cache_fresh` for each unique location (parallel)
+/// 3. Extract forecasts from cached JSON in-memory for all checkpoints
+/// 4. Write to forecasts table for history (ON CONFLICT DO NOTHING)
+/// 5. Re-query DB for canonical Forecast rows
 ///
-/// Warm-cache happy path: **2 DB queries** total (regardless of checkpoint count).
+/// This fixes the cache-valid-but-no-extracted-forecast bug and eliminates
+/// the N+1 query pattern from the old extract-on-write architecture.
 pub async fn resolve_race_forecasts(
     pool: &PgPool,
     yr_client: &YrClient,
     checkpoints: &[CheckpointWithTime],
-    staleness_secs: u64,
+    _staleness_secs: u64,
 ) -> Result<Vec<ResolvedForecast>, AppError> {
     let n = checkpoints.len();
 
-    // ── Step 1: Batch-fetch latest forecasts for all checkpoints (1 query) ──
-    let pairs: Vec<(Uuid, DateTime<Utc>)> = checkpoints
-        .iter()
-        .map(|cpwt| (cpwt.checkpoint.id, cpwt.forecast_time))
-        .collect();
-
-    let cached_forecasts = queries::get_latest_forecasts_batch(pool, &pairs).await?;
-
-    // ── Step 2: Batch-check yr.no cache validity for all locations (1 query) ──
-    let locations: Vec<(Decimal, Decimal, Decimal)> = checkpoints
-        .iter()
-        .map(|cpwt| {
-            (
-                cpwt.checkpoint.latitude,
-                cpwt.checkpoint.longitude,
-                cpwt.checkpoint.elevation_m,
-            )
-        })
-        .collect();
-
-    let unique_locations: Vec<(Decimal, Decimal, Decimal)> = {
-        let mut seen = std::collections::HashSet::new();
-        locations
-            .iter()
-            .filter(|loc| seen.insert(**loc))
-            .copied()
-            .collect()
-    };
-
-    let valid_locations = queries::get_valid_yr_cache_locations(pool, &unique_locations).await?;
-    let valid_set: std::collections::HashSet<(Decimal, Decimal, Decimal)> =
-        valid_locations.into_iter().collect();
-
-    // ── Step 3: Classify each checkpoint ──
-    let mut results: Vec<Option<ResolvedForecast>> = vec![None; n];
-    let mut need_yr: Vec<usize> = Vec::new();
-
-    for i in 0..n {
-        if let Some(ref forecast) = cached_forecasts[i] {
-            let loc = &locations[i];
-
-            if valid_set.contains(loc) {
-                results[i] = Some(ResolvedForecast {
-                    forecast: Some(forecast.clone()),
-                    is_stale: false,
-                });
-                continue;
-            }
-
-            // Fallback: staleness check
-            let age = Utc::now() - forecast.fetched_at;
-            if age.num_seconds() < staleness_secs as i64 {
-                results[i] = Some(ResolvedForecast {
-                    forecast: Some(forecast.clone()),
-                    is_stale: false,
-                });
-                continue;
-            }
-        }
-
-        need_yr.push(i);
-    }
-
-    if need_yr.is_empty() {
-        return Ok(results.into_iter().map(|r| r.unwrap()).collect());
-    }
-
-    // ── Step 4: Group stale checkpoints by location, fetch + insert targeted forecasts ──
+    // ── Step 1: Group checkpoints by location ──
     let mut location_groups: HashMap<LocationKey, Vec<usize>> = HashMap::new();
-    for &idx in &need_yr {
-        let cp = &checkpoints[idx].checkpoint;
+    for (idx, cpwt) in checkpoints.iter().enumerate() {
         let key = LocationKey {
-            latitude: cp.latitude,
-            longitude: cp.longitude,
-            elevation_m: cp.elevation_m,
+            latitude: cpwt.checkpoint.latitude,
+            longitude: cpwt.checkpoint.longitude,
+            elevation_m: cpwt.checkpoint.elevation_m,
         };
         location_groups.entry(key).or_default().push(idx);
     }
 
-    let mut fetch_futures = Vec::new();
+    // ── Step 2: Ensure yr.no cache fresh for each unique location (parallel) ──
     let location_keys: Vec<LocationKey> = location_groups.keys().cloned().collect();
+    let mut fetch_futures = Vec::new();
 
     for key in &location_keys {
         let pool = pool.clone();
@@ -557,71 +448,128 @@ pub async fn resolve_race_forecasts(
         let lon = key.longitude;
         let ele = key.elevation_m;
 
-        // Collect (checkpoint_id, forecast_time) pairs at this location
-        let targets: Vec<(Uuid, DateTime<Utc>)> = location_groups[key]
-            .iter()
-            .map(|&idx| (checkpoints[idx].checkpoint.id, checkpoints[idx].forecast_time))
-            .collect();
-
-        fetch_futures.push(async move {
-            ensure_yr_timeseries(&pool, &yr_client, lat, lon, ele, &targets).await
-        });
+        fetch_futures
+            .push(async move { ensure_yr_cache_fresh(&pool, &yr_client, lat, lon, ele).await });
     }
 
     let fetch_results = futures::future::join_all(fetch_futures).await;
 
-    // ── Step 5: Re-query DB for checkpoints that needed fresh data ──
+    // ── Step 3: Build location → JSON map, handling errors with DB fallback ──
+    let mut location_json: HashMap<LocationKey, serde_json::Value> = HashMap::new();
+    let mut stale_locations: std::collections::HashSet<LocationKey> =
+        std::collections::HashSet::new();
+
+    // Pre-fetch cached forecasts for fallback (only if needed)
+    let pairs: Vec<(Uuid, DateTime<Utc>)> = checkpoints
+        .iter()
+        .map(|cpwt| (cpwt.checkpoint.id, cpwt.forecast_time))
+        .collect();
+    // We batch-query cached forecasts upfront so we have stale fallbacks available
+    let cached_forecasts = queries::get_latest_forecasts_batch(pool, &pairs).await?;
+
     for (loc_idx, fetch_result) in fetch_results.into_iter().enumerate() {
-        let key = &location_keys[loc_idx];
-        let cp_indices = &location_groups[key];
-
+        let key = location_keys[loc_idx].clone();
         match fetch_result {
-            Ok(_) => {
-                // Data was fetched and inserted (or skipped if out-of-range).
-                // Query DB for each checkpoint's nearest forecast to its pacing time.
-                for &cp_idx in cp_indices {
-                    let cpwt = &checkpoints[cp_idx];
-                    let forecast =
-                        queries::get_latest_forecast(pool, cpwt.checkpoint.id, cpwt.forecast_time)
-                            .await?;
-
-                    // forecast is None when yr.no doesn't cover the requested time
-                    // (e.g. race date is beyond the ~10-day forecast horizon).
-                    // This is not an error — we return it as "forecast not available".
-                    results[cp_idx] = Some(ResolvedForecast {
-                        forecast,
-                        is_stale: false,
-                    });
-                }
+            Ok(json) => {
+                location_json.insert(key, json);
             }
             Err(e) => {
-                // yr.no failed — return stale data from the batch we already fetched
-                for &cp_idx in cp_indices {
-                    let cpwt = &checkpoints[cp_idx];
+                // yr.no failed for this location — check if we have stale DB fallbacks
+                let cp_indices = &location_groups[&key];
+                let any_without_fallback = cp_indices
+                    .iter()
+                    .any(|&idx| cached_forecasts[idx].is_none());
 
-                    if let Some(ref forecast) = cached_forecasts[cp_idx] {
-                        tracing::warn!(
-                            "yr.no unavailable for location ({}, {}), returning stale data: {}",
-                            key.latitude,
-                            key.longitude,
-                            e
-                        );
-                        results[cp_idx] = Some(ResolvedForecast {
-                            forecast: Some(forecast.clone()),
-                            is_stale: true,
-                        });
-                    } else {
-                        return Err(AppError::ExternalServiceError(format!(
-                            "yr.no unavailable for checkpoint {} and no cached data: {}",
-                            cpwt.checkpoint.name, e
-                        )));
-                    }
+                if any_without_fallback {
+                    return Err(AppError::ExternalServiceError(format!(
+                        "yr.no unavailable for location ({}, {}) and no cached data: {}",
+                        key.latitude, key.longitude, e
+                    )));
                 }
+
+                tracing::warn!(
+                    "yr.no unavailable for location ({}, {}), will use stale DB data: {}",
+                    key.latitude,
+                    key.longitude,
+                    e
+                );
+                stale_locations.insert(key);
             }
         }
     }
 
-    Ok(results.into_iter().map(|r| r.unwrap()).collect())
+    // ── Step 4: Extract forecasts from JSON + write to DB for history ──
+    let mut results: Vec<Option<ResolvedForecast>> = vec![None; n];
+
+    for (key, cp_indices) in &location_groups {
+        if stale_locations.contains(key) {
+            // Use stale DB fallback for this location
+            for &idx in cp_indices {
+                results[idx] = Some(ResolvedForecast {
+                    forecast: cached_forecasts[idx].clone(),
+                    is_stale: true,
+                });
+            }
+            continue;
+        }
+
+        let raw_json = &location_json[key];
+
+        // Collect forecast times for all checkpoints at this location
+        let forecast_times: Vec<DateTime<Utc>> = cp_indices
+            .iter()
+            .map(|&idx| checkpoints[idx].forecast_time)
+            .collect();
+
+        // Extract all at once (single JSON deserialization per location)
+        let parsed = extract_forecasts_at_times(raw_json.clone(), &forecast_times)?;
+        let now = Utc::now();
+
+        for (i, &cp_idx) in cp_indices.iter().enumerate() {
+            if let Some(ref forecast_data) = parsed[i] {
+                // Write to forecasts table for history (ON CONFLICT DO NOTHING)
+                let params = build_single_insert_params(
+                    checkpoints[cp_idx].checkpoint.id,
+                    forecast_data,
+                    now,
+                );
+                let _ = queries::insert_forecast(pool, params).await?;
+            }
+        }
+
+        // Re-query DB for canonical Forecast rows (batch for this location's checkpoints)
+        for (i, &cp_idx) in cp_indices.iter().enumerate() {
+            if parsed[i].is_some() {
+                let cpwt = &checkpoints[cp_idx];
+                let forecast =
+                    queries::get_latest_forecast(pool, cpwt.checkpoint.id, cpwt.forecast_time)
+                        .await?;
+                results[cp_idx] = Some(ResolvedForecast {
+                    forecast,
+                    is_stale: false,
+                });
+            } else {
+                // Beyond yr.no horizon — no forecast available
+                results[cp_idx] = Some(ResolvedForecast {
+                    forecast: None,
+                    is_stale: false,
+                });
+            }
+        }
+    }
+
+    results
+        .into_iter()
+        .enumerate()
+        .map(|(i, r)| {
+            r.ok_or_else(|| {
+                AppError::InternalError(format!(
+                    "Missing resolved forecast for checkpoint index {}",
+                    i
+                ))
+            })
+        })
+        .collect()
 }
 
 /// Resolve a checkpoint by ID from the database.
@@ -1008,5 +956,356 @@ mod tests {
 
         // Precipitation type: symbol_code "lightsnow" → "snow"
         assert_eq!(params.precipitation_type, "snow");
+    }
+
+    #[test]
+    fn test_build_single_insert_params_all_optional_fields_none() {
+        use crate::services::yr::{ForecastResolution, YrParsedForecast};
+
+        let checkpoint_id = Uuid::new_v4();
+        let fetched_at = Utc::now();
+
+        let forecast = YrParsedForecast {
+            forecast_time: "2026-03-01T07:00:00Z".parse().unwrap(),
+            temperature_c: Decimal::from_str("2.0").unwrap(),
+            temperature_percentile_10_c: None,
+            temperature_percentile_90_c: None,
+            wind_speed_ms: Decimal::from_str("0.5").unwrap(),
+            wind_speed_percentile_10_ms: None,
+            wind_speed_percentile_90_ms: None,
+            wind_direction_deg: Decimal::from_str("90.0").unwrap(),
+            wind_gust_ms: None,
+            precipitation_mm: Decimal::from_str("0.0").unwrap(),
+            precipitation_min_mm: None,
+            precipitation_max_mm: None,
+            humidity_pct: Decimal::from_str("60.0").unwrap(),
+            dew_point_c: Decimal::from_str("-2.0").unwrap(),
+            cloud_cover_pct: Decimal::from_str("0.0").unwrap(),
+            uv_index: None,
+            symbol_code: "clearsky_day".to_string(),
+            yr_model_run_at: None,
+            resolution: ForecastResolution::SixHourly,
+        };
+
+        let params = build_single_insert_params(checkpoint_id, &forecast, fetched_at);
+
+        // All optional fields should be None
+        assert!(params.temperature_percentile_10_c.is_none());
+        assert!(params.temperature_percentile_90_c.is_none());
+        assert!(params.wind_speed_percentile_10_ms.is_none());
+        assert!(params.wind_speed_percentile_90_ms.is_none());
+        assert!(params.wind_gust_ms.is_none());
+        assert!(params.precipitation_min_mm.is_none());
+        assert!(params.precipitation_max_mm.is_none());
+        assert!(params.uv_index.is_none());
+        assert!(params.yr_model_run_at.is_none());
+
+        // Zero precip -> "none"
+        assert_eq!(params.precipitation_type, "none");
+
+        // Warm temp (2°C) with very low wind (0.5 m/s = 1.8 km/h < 4.8)
+        // -> no wind chill applied, feels_like equals temperature
+        let feels_like_f64 = params.feels_like_c.to_f64().unwrap();
+        assert!(
+            (feels_like_f64 - 2.0).abs() < 0.1,
+            "Warm + no wind: feels_like should equal temperature, got {}",
+            feels_like_f64
+        );
+    }
+
+    #[test]
+    fn test_build_single_insert_params_all_optional_fields_some() {
+        use crate::services::yr::{ForecastResolution, YrParsedForecast};
+
+        let checkpoint_id = Uuid::new_v4();
+        let fetched_at = Utc::now();
+        let model_run = "2026-02-28T06:00:00Z".parse::<DateTime<Utc>>().unwrap();
+
+        let forecast = YrParsedForecast {
+            forecast_time: "2026-03-01T10:00:00Z".parse().unwrap(),
+            temperature_c: Decimal::from_str("-8.0").unwrap(),
+            temperature_percentile_10_c: Some(Decimal::from_str("-10.0").unwrap()),
+            temperature_percentile_90_c: Some(Decimal::from_str("-6.0").unwrap()),
+            wind_speed_ms: Decimal::from_str("5.0").unwrap(),
+            wind_speed_percentile_10_ms: Some(Decimal::from_str("3.0").unwrap()),
+            wind_speed_percentile_90_ms: Some(Decimal::from_str("8.0").unwrap()),
+            wind_direction_deg: Decimal::from_str("270.0").unwrap(),
+            wind_gust_ms: Some(Decimal::from_str("12.0").unwrap()),
+            precipitation_mm: Decimal::from_str("1.5").unwrap(),
+            precipitation_min_mm: Some(Decimal::from_str("0.5").unwrap()),
+            precipitation_max_mm: Some(Decimal::from_str("3.0").unwrap()),
+            humidity_pct: Decimal::from_str("90.0").unwrap(),
+            dew_point_c: Decimal::from_str("-9.5").unwrap(),
+            cloud_cover_pct: Decimal::from_str("100.0").unwrap(),
+            uv_index: Some(Decimal::from_str("0.5").unwrap()),
+            symbol_code: "heavysnow".to_string(),
+            yr_model_run_at: Some(model_run),
+            resolution: ForecastResolution::Hourly,
+        };
+
+        let params = build_single_insert_params(checkpoint_id, &forecast, fetched_at);
+
+        // All optional fields should be Some and pass through
+        assert_eq!(
+            params.temperature_percentile_10_c,
+            Some(Decimal::from_str("-10.0").unwrap())
+        );
+        assert_eq!(
+            params.temperature_percentile_90_c,
+            Some(Decimal::from_str("-6.0").unwrap())
+        );
+        assert_eq!(
+            params.wind_speed_percentile_10_ms,
+            Some(Decimal::from_str("3.0").unwrap())
+        );
+        assert_eq!(
+            params.wind_speed_percentile_90_ms,
+            Some(Decimal::from_str("8.0").unwrap())
+        );
+        assert_eq!(
+            params.wind_gust_ms,
+            Some(Decimal::from_str("12.0").unwrap())
+        );
+        assert_eq!(
+            params.precipitation_min_mm,
+            Some(Decimal::from_str("0.5").unwrap())
+        );
+        assert_eq!(
+            params.precipitation_max_mm,
+            Some(Decimal::from_str("3.0").unwrap())
+        );
+        assert_eq!(params.uv_index, Some(Decimal::from_str("0.5").unwrap()));
+        assert_eq!(params.yr_model_run_at, Some(model_run));
+
+        // Cold + windy -> wind chill should lower it significantly
+        let feels_like_f64 = params.feels_like_c.to_f64().unwrap();
+        assert!(
+            feels_like_f64 < -12.0,
+            "-8°C + 5 m/s wind: feels_like should be well below -8, got {}",
+            feels_like_f64
+        );
+
+        assert_eq!(params.precipitation_type, "snow");
+    }
+
+    #[test]
+    fn test_build_single_insert_params_zero_precip_with_snow_symbol() {
+        use crate::services::yr::{ForecastResolution, YrParsedForecast};
+
+        // Edge case: symbol says "snow" but precipitation is 0.0 -> should be "none"
+        let forecast = YrParsedForecast {
+            forecast_time: "2026-03-01T07:00:00Z".parse().unwrap(),
+            temperature_c: Decimal::from_str("-5.0").unwrap(),
+            temperature_percentile_10_c: None,
+            temperature_percentile_90_c: None,
+            wind_speed_ms: Decimal::from_str("2.0").unwrap(),
+            wind_speed_percentile_10_ms: None,
+            wind_speed_percentile_90_ms: None,
+            wind_direction_deg: Decimal::from_str("0.0").unwrap(),
+            wind_gust_ms: None,
+            precipitation_mm: Decimal::from_str("0.0").unwrap(),
+            precipitation_min_mm: None,
+            precipitation_max_mm: None,
+            humidity_pct: Decimal::from_str("50.0").unwrap(),
+            dew_point_c: Decimal::from_str("-10.0").unwrap(),
+            cloud_cover_pct: Decimal::from_str("80.0").unwrap(),
+            uv_index: None,
+            symbol_code: "lightsnow".to_string(),
+            yr_model_run_at: None,
+            resolution: ForecastResolution::Hourly,
+        };
+
+        let params = build_single_insert_params(Uuid::new_v4(), &forecast, Utc::now());
+        assert_eq!(params.precipitation_type, "none");
+    }
+
+    // --- calculate_pass_time_fractions edge cases ---
+
+    #[test]
+    fn test_elevation_fractions_two_checkpoints() {
+        // Minimal non-trivial case: just start and finish
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 300.0,
+            },
+            PacingCheckpoint {
+                distance_km: 90.0,
+                elevation_m: 160.0,
+            },
+        ];
+        let fractions = calculate_pass_time_fractions(&checkpoints);
+        assert_eq!(fractions.len(), 2);
+        assert!((fractions[0] - 0.0).abs() < 1e-10);
+        assert!((fractions[1] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_elevation_fractions_zero_length_segment() {
+        // Two checkpoints at the same distance in the middle of a course
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 300.0,
+            },
+            PacingCheckpoint {
+                distance_km: 45.0,
+                elevation_m: 500.0,
+            },
+            PacingCheckpoint {
+                distance_km: 45.0,
+                elevation_m: 500.0,
+            }, // duplicate distance
+            PacingCheckpoint {
+                distance_km: 90.0,
+                elevation_m: 160.0,
+            },
+        ];
+        let fractions = calculate_pass_time_fractions(&checkpoints);
+        assert_eq!(fractions.len(), 4);
+        assert!((fractions[0] - 0.0).abs() < 1e-10);
+        assert!((fractions[3] - 1.0).abs() < 1e-10);
+        // The zero-length segment should have no cost, so fractions[1] == fractions[2]
+        assert!(
+            (fractions[1] - fractions[2]).abs() < 1e-10,
+            "Zero-length segment should have equal fractions: {} vs {}",
+            fractions[1],
+            fractions[2]
+        );
+        // Fractions should be monotonically non-decreasing
+        for i in 0..(fractions.len() - 1) {
+            assert!(
+                fractions[i] <= fractions[i + 1] + 1e-10,
+                "Fractions should be monotonically non-decreasing"
+            );
+        }
+    }
+
+    #[test]
+    fn test_elevation_fractions_all_distance_zero() {
+        // All checkpoints at distance 0 — triggers degenerate fallback
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 100.0,
+            },
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 200.0,
+            },
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 300.0,
+            },
+        ];
+        let fractions = calculate_pass_time_fractions(&checkpoints);
+        assert_eq!(fractions.len(), 3);
+        // Falls back to evenly spaced: 0.0, 0.5, 1.0
+        assert!((fractions[0] - 0.0).abs() < 1e-10);
+        assert!((fractions[1] - 0.5).abs() < 1e-10);
+        assert!((fractions[2] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_elevation_fractions_steep_downhill_hits_min_cost() {
+        // Extremely steep downhill: 1000m drop over 1km -> gradient = -1.0
+        // cost_factor = (1.0 - 4.0 * 1.0) = -3.0 -> clamped to MIN_COST_FACTOR (0.5)
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 1000.0,
+            },
+            PacingCheckpoint {
+                distance_km: 1.0,
+                elevation_m: 0.0,
+            }, // steep downhill
+            PacingCheckpoint {
+                distance_km: 2.0,
+                elevation_m: 0.0,
+            }, // flat
+        ];
+        let fractions = calculate_pass_time_fractions(&checkpoints);
+        assert_eq!(fractions.len(), 3);
+        assert!((fractions[0] - 0.0).abs() < 1e-10);
+        assert!((fractions[2] - 1.0).abs() < 1e-10);
+
+        // Steep downhill (cost 0.5*1km=0.5) should get less time than flat (cost 1.0*1km=1.0)
+        let downhill_fraction = fractions[1]; // fraction after downhill segment
+        let flat_fraction = fractions[2] - fractions[1]; // fraction of flat segment
+        assert!(
+            downhill_fraction < flat_fraction,
+            "Steep downhill ({}) should get less time than flat ({})",
+            downhill_fraction,
+            flat_fraction
+        );
+        // Downhill cost = 0.5, flat cost = 1.0, total = 1.5
+        // Expected fractions: 0.0, 0.5/1.5 = 0.333, 1.0
+        assert!(
+            (fractions[1] - 1.0 / 3.0).abs() < 1e-10,
+            "Expected 1/3 for steep downhill, got {}",
+            fractions[1]
+        );
+    }
+
+    #[test]
+    fn test_elevation_fractions_steep_uphill() {
+        // Steep uphill: 500m gain over 1km -> gradient = 0.5
+        // cost_factor = 1.0 + 12.0 * 0.5 = 7.0
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 0.0,
+            },
+            PacingCheckpoint {
+                distance_km: 1.0,
+                elevation_m: 500.0,
+            }, // steep uphill
+            PacingCheckpoint {
+                distance_km: 2.0,
+                elevation_m: 500.0,
+            }, // flat
+        ];
+        let fractions = calculate_pass_time_fractions(&checkpoints);
+        assert_eq!(fractions.len(), 3);
+
+        // Uphill cost = 7.0*1km=7.0, flat cost = 1.0*1km=1.0, total = 8.0
+        // Expected: 0.0, 7/8=0.875, 1.0
+        assert!(
+            (fractions[1] - 7.0 / 8.0).abs() < 1e-10,
+            "Expected 7/8 for steep uphill, got {}",
+            fractions[1]
+        );
+    }
+
+    #[test]
+    fn test_elevation_fractions_negative_distance_delta() {
+        // Non-monotonic distances (should handle gracefully with zero cost)
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 100.0,
+            },
+            PacingCheckpoint {
+                distance_km: 50.0,
+                elevation_m: 200.0,
+            },
+            PacingCheckpoint {
+                distance_km: 30.0,
+                elevation_m: 150.0,
+            }, // backwards!
+            PacingCheckpoint {
+                distance_km: 90.0,
+                elevation_m: 100.0,
+            },
+        ];
+        let fractions = calculate_pass_time_fractions(&checkpoints);
+        assert_eq!(fractions.len(), 4);
+        assert!((fractions[0] - 0.0).abs() < 1e-10);
+        assert!((fractions[3] - 1.0).abs() < 1e-10);
+        // Negative-distance segment gets zero cost, so fractions[1] == fractions[2]
+        assert!(
+            (fractions[1] - fractions[2]).abs() < 1e-10,
+            "Negative-distance segment should have zero cost"
+        );
     }
 }

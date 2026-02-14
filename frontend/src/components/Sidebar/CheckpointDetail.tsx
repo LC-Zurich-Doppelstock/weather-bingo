@@ -138,17 +138,21 @@ export default function CheckpointDetail({
       </WeatherRow>
 
       {/* Humidity & Cloud cover */}
-      <WeatherRow label="Humidity">
-        <div className="text-text-primary">
-          {formatPercent(w.humidity_pct)}
-        </div>
-      </WeatherRow>
+      {w.humidity_pct != null && (
+        <WeatherRow label="Humidity">
+          <div className="text-text-primary">
+            {formatPercent(w.humidity_pct)}
+          </div>
+        </WeatherRow>
+      )}
 
-      <WeatherRow label="Cloud cover">
-        <div className="text-text-primary">
-          {formatPercent(w.cloud_cover_pct)}
-        </div>
-      </WeatherRow>
+      {w.cloud_cover_pct != null && (
+        <WeatherRow label="Cloud cover">
+          <div className="text-text-primary">
+            {formatPercent(w.cloud_cover_pct)}
+          </div>
+        </WeatherRow>
+      )}
 
       {/* UV Index (if available) */}
       {w.uv_index != null && (

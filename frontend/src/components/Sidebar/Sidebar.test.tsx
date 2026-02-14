@@ -18,7 +18,6 @@ const mockRace: Race = {
 const mockCheckpoints: Checkpoint[] = [
   {
     id: "cp-1",
-    race_id: "race-1",
     name: "Salen",
     distance_km: 0,
     latitude: 61.16,
@@ -28,7 +27,6 @@ const mockCheckpoints: Checkpoint[] = [
   },
   {
     id: "cp-2",
-    race_id: "race-1",
     name: "Mangsbodarna",
     distance_km: 24,
     latitude: 61.12,
@@ -42,12 +40,14 @@ const mockRaceForecast = {
   race_id: "race-1",
   race_name: "Vasaloppet",
   target_duration_hours: 8,
+  yr_model_run_at: "2026-02-28T06:00:00Z",
   checkpoints: [
     {
       checkpoint_id: "cp-1",
       name: "Salen",
       distance_km: 0,
       expected_time: "2026-03-01T07:00:00Z",
+      forecast_available: true,
       weather: {
         temperature_c: -5,
         temperature_percentile_10_c: -8,
@@ -67,6 +67,7 @@ const mockRaceForecast = {
       name: "Mangsbodarna",
       distance_km: 24,
       expected_time: "2026-03-01T09:08:00Z",
+      forecast_available: true,
       weather: {
         temperature_c: -3,
         temperature_percentile_10_c: -6,
@@ -88,7 +89,9 @@ const mockForecast = {
   checkpoint_id: "cp-1",
   checkpoint_name: "Salen",
   forecast_time: "2026-03-01T07:00:00Z",
+  forecast_available: true,
   fetched_at: "2026-02-28T12:00:00Z",
+  yr_model_run_at: "2026-02-28T06:00:00Z",
   source: "yr.no",
   stale: false,
   weather: {
