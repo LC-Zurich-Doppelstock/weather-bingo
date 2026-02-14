@@ -16,8 +16,8 @@ use uuid::Uuid;
 use crate::db::{models, queries};
 use crate::errors::{AppError, ErrorResponse};
 use crate::services::forecast::{
-    calculate_pass_time, get_checkpoint, resolve_forecast, resolve_race_forecasts,
-    CheckpointWithTime,
+    calculate_pass_time_fractions, calculate_pass_time_weighted, get_checkpoint, resolve_forecast,
+    resolve_race_forecasts, CheckpointWithTime, PacingCheckpoint,
 };
 use crate::services::yr::YrClient;
 
@@ -335,9 +335,9 @@ pub async fn get_checkpoint_forecast_history(
 
 /// Get weather forecasts for all checkpoints in a race.
 ///
-/// Calculates expected pass-through times for each checkpoint using even
-/// pacing based on the target duration, then returns the latest weather
-/// forecast for each checkpoint at its expected time.
+/// Calculates expected pass-through times for each checkpoint using
+/// elevation-adjusted pacing based on the target duration, then returns
+/// the latest weather forecast for each checkpoint at its expected time.
 #[utoipa::path(
     get,
     path = "/api/v1/forecasts/race/{race_id}",
@@ -362,18 +362,26 @@ pub async fn get_race_forecast(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Race {} not found", race_id)))?;
 
-    let race_distance_km = race.distance_km.to_f64().unwrap_or(0.0);
     let checkpoints = queries::get_checkpoints(&state.pool, race_id).await?;
 
-    // Build checkpoint + expected time pairs
+    // Compute elevation-adjusted time fractions
+    let pacing_inputs: Vec<PacingCheckpoint> = checkpoints
+        .iter()
+        .map(|cp| PacingCheckpoint {
+            distance_km: cp.distance_km.to_f64().unwrap_or(0.0),
+            elevation_m: cp.elevation_m.to_f64().unwrap_or(0.0),
+        })
+        .collect();
+    let time_fractions = calculate_pass_time_fractions(&pacing_inputs);
+
+    // Build checkpoint + expected time pairs using elevation-adjusted pacing
     let checkpoints_with_times: Vec<CheckpointWithTime> = checkpoints
         .into_iter()
-        .map(|cp| {
-            let cp_distance = cp.distance_km.to_f64().unwrap_or(0.0);
-            let expected_time = calculate_pass_time(
+        .zip(time_fractions.iter())
+        .map(|(cp, &fraction)| {
+            let expected_time = calculate_pass_time_weighted(
                 race.start_time,
-                cp_distance,
-                race_distance_km,
+                fraction,
                 params.target_duration_hours,
             );
             CheckpointWithTime {

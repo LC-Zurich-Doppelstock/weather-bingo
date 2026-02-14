@@ -837,16 +837,49 @@ The application is deployable to [Railway](https://railway.com/) as a PoC/stagin
 
 ## 10. Pacing Model
 
-### 10.1 Current: Even Pacing
+### 10.1 Even Pacing (Fallback)
 
 ```
 pass_through_time(checkpoint) =
   race.start_time + target_duration × (checkpoint.distance_km / race.distance_km)
 ```
 
-### 10.2 Future: Elevation-Adjusted Pacing
+Used as fallback when all checkpoints have the same elevation (flat course).
 
-A future improvement will adjust pacing based on elevation profile from GPX data, allocating more time to uphill segments and less to downhill. The data model already stores `elevation_m` per checkpoint to support this.
+### 10.2 Elevation-Adjusted Pacing (Default)
+
+Distributes total race time across segments proportionally to effort cost, which accounts for gradient. Uphill segments get more time, downhill segments less. Total duration remains exactly the user's target.
+
+**Algorithm:**
+
+1. For each consecutive checkpoint pair, compute:
+   - `gradient = (ele_next − ele_current) / (distance_delta_km × 1000)` (m/m)
+   - `cost_factor`:
+     - Uphill (gradient ≥ 0): `max(1.0 + K_UP × gradient, MIN_COST)`
+     - Downhill (gradient < 0): `max(1.0 − K_DOWN × |gradient|, MIN_COST)`
+   - `segment_cost = cost_factor × distance_delta_km`
+
+2. Sum all segment costs → `total_cost`
+
+3. Cumulative time fraction for checkpoint _i_:
+   ```
+   fraction[0] = 0.0
+   fraction[i] = sum(segment_cost[0..i]) / total_cost
+   fraction[last] = 1.0
+   ```
+
+4. Pass-through time:
+   ```
+   pass_through_time(checkpoint_i) = start_time + target_duration × fraction[i]
+   ```
+
+**Constants (tuned for cross-country skiing):**
+
+| Constant | Value | Effect |
+|----------|-------|--------|
+| `K_UP` | 12.0 | 5% uphill grade → 1.6× cost per km |
+| `K_DOWN` | 4.0 | 5% downhill grade → 0.8× cost per km |
+| `MIN_COST_FACTOR` | 0.5 | Floor — even steep downhill isn't free |
 
 ---
 
@@ -866,7 +899,7 @@ A future improvement will adjust pacing based on elevation profile from GPX data
 
 ## 12. Future Enhancements (Out of Scope for v1)
 
-- [ ] Elevation-adjusted pacing model
+- [x] Elevation-adjusted pacing model
 - [ ] Forecast interpolation (sub-hourly granularity)
 - [ ] Additional races (Birkebeinerrennet, Marcialonga, Engadin Skimarathon, …)
 - [ ] Historical weather source for past seasons

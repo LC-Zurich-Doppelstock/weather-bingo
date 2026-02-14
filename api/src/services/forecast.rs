@@ -79,7 +79,11 @@ pub fn infer_precipitation_type(
 /// Calculate the expected pass-through time for a checkpoint using even pacing.
 ///
 /// pass_time = start_time + duration * (checkpoint.distance_km / race.distance_km)
-pub fn calculate_pass_time(
+///
+/// Superseded by `calculate_pass_time_weighted` + `calculate_pass_time_fractions`
+/// for elevation-adjusted pacing. Retained for tests.
+#[cfg(test)]
+fn calculate_pass_time(
     start_time: DateTime<Utc>,
     checkpoint_distance_km: f64,
     race_distance_km: f64,
@@ -87,6 +91,114 @@ pub fn calculate_pass_time(
 ) -> DateTime<Utc> {
     let fraction = checkpoint_distance_km / race_distance_km;
     let duration_secs = (target_duration_hours * 3600.0 * fraction) as i64;
+    start_time + Duration::seconds(duration_secs)
+}
+
+// --- Elevation-adjusted pacing ---
+//
+// Distributes total race time across segments proportionally to effort cost,
+// which accounts for gradient. Uphill segments get more time, downhill less,
+// while the total duration stays exactly the same as the user's target.
+
+/// Uphill cost multiplier per unit gradient (m/m).
+/// A 5% uphill grade → cost factor 1.6× per km.
+const K_UP: f64 = 12.0;
+
+/// Downhill cost multiplier per unit gradient (m/m).
+/// A 5% downhill grade → cost factor 0.8× per km.
+const K_DOWN: f64 = 4.0;
+
+/// Minimum cost factor per km (floor). Even steep downhill isn't free in XC skiing.
+const MIN_COST_FACTOR: f64 = 0.5;
+
+/// Input for elevation-adjusted pacing calculation.
+pub struct PacingCheckpoint {
+    pub distance_km: f64,
+    pub elevation_m: f64,
+}
+
+/// Compute cumulative time fractions for each checkpoint based on elevation profile.
+///
+/// Returns a `Vec<f64>` of the same length as `checkpoints`, where:
+/// - index 0 is always 0.0 (start)
+/// - last index is always 1.0 (finish)
+/// - intermediate values reflect effort-weighted cumulative time
+///
+/// If there are fewer than 2 checkpoints, returns trivial fractions.
+/// Falls back to even (distance-based) pacing if total distance is zero.
+pub fn calculate_pass_time_fractions(checkpoints: &[PacingCheckpoint]) -> Vec<f64> {
+    let n = checkpoints.len();
+    if n == 0 {
+        return vec![];
+    }
+    if n == 1 {
+        return vec![0.0];
+    }
+
+    // Compute cost for each segment between consecutive checkpoints
+    let mut segment_costs = Vec::with_capacity(n - 1);
+    for i in 0..(n - 1) {
+        let dist_delta = checkpoints[i + 1].distance_km - checkpoints[i].distance_km;
+        if dist_delta <= 0.0 {
+            // Zero-length or negative segment — assign minimal cost
+            segment_costs.push(0.0);
+            continue;
+        }
+
+        let ele_delta = checkpoints[i + 1].elevation_m - checkpoints[i].elevation_m;
+        // gradient in m/m (rise over run)
+        let gradient = ele_delta / (dist_delta * 1000.0);
+
+        let cost_factor = if gradient >= 0.0 {
+            // Uphill: penalise
+            (1.0 + K_UP * gradient).max(MIN_COST_FACTOR)
+        } else {
+            // Downhill: bonus (gradient is negative, K_DOWN is positive)
+            (1.0 - K_DOWN * gradient.abs()).max(MIN_COST_FACTOR)
+        };
+
+        segment_costs.push(cost_factor * dist_delta);
+    }
+
+    let total_cost: f64 = segment_costs.iter().sum();
+    if total_cost <= 0.0 {
+        // Degenerate case — fall back to even pacing by distance
+        let total_dist = checkpoints.last().unwrap().distance_km;
+        if total_dist <= 0.0 {
+            return (0..n).map(|i| i as f64 / (n - 1) as f64).collect();
+        }
+        return checkpoints
+            .iter()
+            .map(|cp| cp.distance_km / total_dist)
+            .collect();
+    }
+
+    // Build cumulative fractions
+    let mut fractions = Vec::with_capacity(n);
+    fractions.push(0.0);
+    let mut cumulative = 0.0;
+    for cost in &segment_costs {
+        cumulative += cost;
+        fractions.push(cumulative / total_cost);
+    }
+
+    // Ensure last fraction is exactly 1.0 (avoid floating-point drift)
+    if let Some(last) = fractions.last_mut() {
+        *last = 1.0;
+    }
+
+    fractions
+}
+
+/// Calculate expected pass-through time from a precomputed time fraction.
+///
+/// pass_time = start_time + target_duration * fraction
+pub fn calculate_pass_time_weighted(
+    start_time: DateTime<Utc>,
+    time_fraction: f64,
+    target_duration_hours: f64,
+) -> DateTime<Utc> {
+    let duration_secs = (target_duration_hours * 3600.0 * time_fraction) as i64;
     start_time + Duration::seconds(duration_secs)
 }
 
@@ -587,5 +699,239 @@ mod tests {
         let result = calculate_pass_time(start, 45.0, 90.0, 8.0);
         let expected = start + Duration::hours(4);
         assert_eq!(result, expected);
+    }
+
+    // --- Elevation-adjusted pacing tests ---
+
+    #[test]
+    fn test_elevation_fractions_flat_course() {
+        // All same elevation → should produce same fractions as even pacing
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 100.0,
+            },
+            PacingCheckpoint {
+                distance_km: 30.0,
+                elevation_m: 100.0,
+            },
+            PacingCheckpoint {
+                distance_km: 60.0,
+                elevation_m: 100.0,
+            },
+            PacingCheckpoint {
+                distance_km: 90.0,
+                elevation_m: 100.0,
+            },
+        ];
+        let fractions = calculate_pass_time_fractions(&checkpoints);
+        assert_eq!(fractions.len(), 4);
+        assert!((fractions[0] - 0.0).abs() < 1e-10);
+        assert!((fractions[1] - 1.0 / 3.0).abs() < 1e-10);
+        assert!((fractions[2] - 2.0 / 3.0).abs() < 1e-10);
+        assert!((fractions[3] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_elevation_fractions_uphill_gets_more_time() {
+        // Uphill first half, flat second half
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 0.0,
+            },
+            PacingCheckpoint {
+                distance_km: 45.0,
+                elevation_m: 500.0,
+            }, // +500m over 45km
+            PacingCheckpoint {
+                distance_km: 90.0,
+                elevation_m: 500.0,
+            }, // flat
+        ];
+        let fractions = calculate_pass_time_fractions(&checkpoints);
+        assert_eq!(fractions.len(), 3);
+        assert!((fractions[0] - 0.0).abs() < 1e-10);
+        // Midpoint should be > 0.5 (uphill first half takes more time)
+        assert!(
+            fractions[1] > 0.5,
+            "Uphill half should take more than 50% of time, got {}",
+            fractions[1]
+        );
+        assert!((fractions[2] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_elevation_fractions_downhill_gets_less_time() {
+        // Flat first half, downhill second half
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 500.0,
+            },
+            PacingCheckpoint {
+                distance_km: 45.0,
+                elevation_m: 500.0,
+            }, // flat
+            PacingCheckpoint {
+                distance_km: 90.0,
+                elevation_m: 0.0,
+            }, // -500m over 45km
+        ];
+        let fractions = calculate_pass_time_fractions(&checkpoints);
+        assert_eq!(fractions.len(), 3);
+        // Midpoint should be > 0.5 (downhill second half takes less time,
+        // so more of the time is spent in the flat first half)
+        assert!(
+            fractions[1] > 0.5,
+            "Flat half before downhill should take more than 50% of time, got {}",
+            fractions[1]
+        );
+        assert!((fractions[2] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_elevation_fractions_total_is_one() {
+        // Vasaloppet-like profile
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 349.0,
+            },
+            PacingCheckpoint {
+                distance_km: 11.0,
+                elevation_m: 502.0,
+            },
+            PacingCheckpoint {
+                distance_km: 24.0,
+                elevation_m: 390.0,
+            },
+            PacingCheckpoint {
+                distance_km: 35.0,
+                elevation_m: 396.0,
+            },
+            PacingCheckpoint {
+                distance_km: 47.0,
+                elevation_m: 419.0,
+            },
+            PacingCheckpoint {
+                distance_km: 62.0,
+                elevation_m: 231.0,
+            },
+            PacingCheckpoint {
+                distance_km: 71.0,
+                elevation_m: 247.0,
+            },
+            PacingCheckpoint {
+                distance_km: 81.0,
+                elevation_m: 206.0,
+            },
+            PacingCheckpoint {
+                distance_km: 90.0,
+                elevation_m: 168.0,
+            },
+        ];
+        let fractions = calculate_pass_time_fractions(&checkpoints);
+        assert_eq!(fractions.len(), 9);
+        assert!((fractions[0] - 0.0).abs() < 1e-10, "Start should be 0.0");
+        assert!((fractions[8] - 1.0).abs() < 1e-10, "Finish should be 1.0");
+
+        // All fractions should be monotonically increasing
+        for i in 1..fractions.len() {
+            assert!(
+                fractions[i] >= fractions[i - 1],
+                "Fractions should be monotonically increasing: f[{}]={} < f[{}]={}",
+                i,
+                fractions[i],
+                i - 1,
+                fractions[i - 1]
+            );
+        }
+    }
+
+    #[test]
+    fn test_elevation_fractions_vasaloppet_first_segment_slower() {
+        // Berga→Smågan is the steepest uphill (+153m over 11km)
+        // It should take more than its distance fraction (11/90 ≈ 0.122)
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 349.0,
+            },
+            PacingCheckpoint {
+                distance_km: 11.0,
+                elevation_m: 502.0,
+            },
+            PacingCheckpoint {
+                distance_km: 24.0,
+                elevation_m: 390.0,
+            },
+            PacingCheckpoint {
+                distance_km: 35.0,
+                elevation_m: 396.0,
+            },
+            PacingCheckpoint {
+                distance_km: 47.0,
+                elevation_m: 419.0,
+            },
+            PacingCheckpoint {
+                distance_km: 62.0,
+                elevation_m: 231.0,
+            },
+            PacingCheckpoint {
+                distance_km: 71.0,
+                elevation_m: 247.0,
+            },
+            PacingCheckpoint {
+                distance_km: 81.0,
+                elevation_m: 206.0,
+            },
+            PacingCheckpoint {
+                distance_km: 90.0,
+                elevation_m: 168.0,
+            },
+        ];
+        let fractions = calculate_pass_time_fractions(&checkpoints);
+        let even_fraction = 11.0 / 90.0;
+        assert!(
+            fractions[1] > even_fraction,
+            "Berga→Smågan should take more than even pacing ({:.3}), got {:.3}",
+            even_fraction,
+            fractions[1]
+        );
+    }
+
+    #[test]
+    fn test_elevation_weighted_pass_time() {
+        let start = DateTime::parse_from_rfc3339("2026-03-01T07:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        // fraction=0.0 → start, fraction=1.0 → start + 8h
+        assert_eq!(calculate_pass_time_weighted(start, 0.0, 8.0), start);
+        assert_eq!(
+            calculate_pass_time_weighted(start, 1.0, 8.0),
+            start + Duration::hours(8)
+        );
+        // fraction=0.25 → start + 2h
+        assert_eq!(
+            calculate_pass_time_weighted(start, 0.25, 8.0),
+            start + Duration::hours(2)
+        );
+    }
+
+    #[test]
+    fn test_elevation_fractions_empty() {
+        let fractions = calculate_pass_time_fractions(&[]);
+        assert!(fractions.is_empty());
+    }
+
+    #[test]
+    fn test_elevation_fractions_single() {
+        let fractions = calculate_pass_time_fractions(&[PacingCheckpoint {
+            distance_km: 0.0,
+            elevation_m: 100.0,
+        }]);
+        assert_eq!(fractions.len(), 1);
+        assert!((fractions[0] - 0.0).abs() < 1e-10);
     }
 }
