@@ -8,8 +8,12 @@ interface CheckpointMarkerProps {
   checkpoint: Checkpoint;
   /** Whether this checkpoint is currently selected. */
   isSelected: boolean;
+  /** Whether this checkpoint is currently hovered (from chart or map). */
+  isHovered: boolean;
   /** Callback when the marker is clicked. */
   onClick: (id: string) => void;
+  /** Callback when the marker is hovered/unhovered. */
+  onHover: (id: string | null) => void;
 }
 
 /**
@@ -20,24 +24,38 @@ interface CheckpointMarkerProps {
 const CheckpointMarker = memo(function CheckpointMarker({
   checkpoint,
   isSelected,
+  isHovered,
   onClick,
+  onHover,
 }: CheckpointMarkerProps) {
   const handleClick = useCallback(() => {
     onClick(checkpoint.id);
   }, [checkpoint.id, onClick]);
 
+  const handleMouseOver = useCallback(() => {
+    onHover(checkpoint.id);
+  }, [checkpoint.id, onHover]);
+
+  const handleMouseOut = useCallback(() => {
+    onHover(null);
+  }, [onHover]);
+
+  const highlighted = isSelected || isHovered;
+
   return (
     <CircleMarker
       center={[checkpoint.latitude, checkpoint.longitude]}
-      radius={isSelected ? 8 : 6}
+      radius={highlighted ? 8 : 6}
       pathOptions={{
-        color: isSelected ? colors.accentRose : colors.accentRose,
-        fillColor: isSelected ? colors.accentRose : colors.surface,
-        fillOpacity: isSelected ? 1 : 0.8,
-        weight: isSelected ? 3 : 2,
+        color: colors.accentRose,
+        fillColor: highlighted ? colors.accentRose : colors.surface,
+        fillOpacity: highlighted ? 1 : 0.8,
+        weight: highlighted ? 3 : 2,
       }}
       eventHandlers={{
         click: handleClick,
+        mouseover: handleMouseOver,
+        mouseout: handleMouseOut,
       }}
     >
       <Tooltip

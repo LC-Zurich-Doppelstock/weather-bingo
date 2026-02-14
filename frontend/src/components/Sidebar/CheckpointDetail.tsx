@@ -149,9 +149,11 @@ export default function CheckpointDetail({
       {/* Metadata */}
       <div className="border-t border-border pt-3 text-xs text-text-muted">
         <div>Source: {forecast.source}</div>
-        <div>
-          Last updated: {formatTimeWithZone(forecast.fetched_at)}
-        </div>
+        {forecast.yr_model_run_at && (
+          <div>
+            Model run: {formatTimeWithZone(forecast.yr_model_run_at)}
+          </div>
+        )}
       </div>
     </div>
   );

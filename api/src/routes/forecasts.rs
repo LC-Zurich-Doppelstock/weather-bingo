@@ -126,6 +126,9 @@ pub struct ForecastResponse {
     pub forecast_time: String,
     /// When this forecast was last fetched from the source (ISO 8601)
     pub fetched_at: String,
+    /// When yr.no's weather model generated this forecast (ISO 8601).
+    /// Null for older rows that predate this tracking.
+    pub yr_model_run_at: Option<String>,
     /// Forecast data source (e.g. "yr.no")
     pub source: String,
     /// Whether this forecast is stale (yr.no was unreachable, serving cached data)
@@ -210,6 +213,9 @@ pub struct RaceForecastResponse {
     pub race_name: String,
     /// Target duration used for pacing calculation
     pub target_duration_hours: f64,
+    /// When yr.no's weather model generated the forecast data (ISO 8601).
+    /// Uses the oldest model run across all checkpoints, or null if unknown.
+    pub yr_model_run_at: Option<String>,
     /// Weather forecasts at each checkpoint
     pub checkpoints: Vec<RaceForecastCheckpoint>,
 }
@@ -267,6 +273,7 @@ pub async fn get_checkpoint_forecast(
         checkpoint_name: checkpoint.name,
         forecast_time: forecast.forecast_time.to_rfc3339(),
         fetched_at: forecast.fetched_at.to_rfc3339(),
+        yr_model_run_at: forecast.yr_model_run_at.map(|dt| dt.to_rfc3339()),
         source: forecast.source.clone(),
         stale: is_stale,
         weather: ForecastWeather::from(&forecast),
@@ -439,10 +446,19 @@ pub async fn get_race_forecast(
         })
         .collect();
 
+    // Find the oldest model run time across all checkpoints
+    // (oldest = most conservative indicator of forecast freshness)
+    let yr_model_run_at = resolved
+        .iter()
+        .filter_map(|r| r.forecast.yr_model_run_at)
+        .min()
+        .map(|dt| dt.to_rfc3339());
+
     Ok(Json(RaceForecastResponse {
         race_id: race.id,
         race_name: race.name,
         target_duration_hours: params.target_duration_hours,
+        yr_model_run_at,
         checkpoints: checkpoint_forecasts,
     }))
 }

@@ -52,6 +52,7 @@ export interface ForecastResponse {
   checkpoint_name: string;
   forecast_time: string; // ISO 8601
   fetched_at: string; // ISO 8601
+  yr_model_run_at: string | null; // ISO 8601
   source: string;
   stale: boolean;
   weather: ForecastWeather;
@@ -59,6 +60,7 @@ export interface ForecastResponse {
 
 export interface ForecastHistoryEntry {
   fetched_at: string; // ISO 8601
+  yr_model_run_at: string | null; // ISO 8601
   weather: ForecastWeather;
 }
 
@@ -94,5 +96,6 @@ export interface RaceForecastResponse {
   race_id: string;
   race_name: string;
   target_duration_hours: number;
+  yr_model_run_at: string | null; // ISO 8601
   checkpoints: RaceForecastCheckpoint[];
 }

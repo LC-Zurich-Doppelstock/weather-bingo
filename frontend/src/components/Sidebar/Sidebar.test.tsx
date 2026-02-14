@@ -144,8 +144,10 @@ describe("Sidebar", () => {
         race={null}
         checkpoints={[]}
         selectedCheckpointId={null}
+        hoveredCheckpointId={null}
         targetDurationHours={8}
         onClearSelection={vi.fn()}
+        onCheckpointHover={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -160,8 +162,10 @@ describe("Sidebar", () => {
         race={mockRace}
         checkpoints={mockCheckpoints}
         selectedCheckpointId={null}
+        hoveredCheckpointId={null}
         targetDurationHours={8}
         onClearSelection={vi.fn()}
+        onCheckpointHover={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -176,8 +180,10 @@ describe("Sidebar", () => {
         race={mockRace}
         checkpoints={mockCheckpoints}
         selectedCheckpointId="cp-1"
+        hoveredCheckpointId={null}
         targetDurationHours={8}
         onClearSelection={vi.fn()}
+        onCheckpointHover={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -196,8 +202,10 @@ describe("Sidebar", () => {
         race={mockRace}
         checkpoints={mockCheckpoints}
         selectedCheckpointId="cp-1"
+        hoveredCheckpointId={null}
         targetDurationHours={8}
         onClearSelection={onClearSelection}
+        onCheckpointHover={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -213,8 +221,10 @@ describe("Sidebar", () => {
         race={mockRace}
         checkpoints={mockCheckpoints}
         selectedCheckpointId="cp-1"
+        hoveredCheckpointId={null}
         targetDurationHours={8}
         onClearSelection={vi.fn()}
+        onCheckpointHover={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );

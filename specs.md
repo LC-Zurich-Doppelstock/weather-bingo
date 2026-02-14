@@ -112,6 +112,7 @@ Table: forecasts
 ├── feels_like_c                DECIMAL     Wind chill / feels-like (calculated)
 ├── precipitation_type          VARCHAR     "snow", "rain", "sleet", "none" (inferred from symbol_code + temp)
 │
+├── yr_model_run_at         TIMESTAMPTZ When the yr.no weather model was run (nullable)
 ├── created_at              TIMESTAMPTZ
 └── raw_response            JSONB       Full raw API response for future use
 ```
@@ -300,6 +301,8 @@ On **mobile**, the sidebar collapses below the map as a bottom sheet / drawer.
 4. **Interact:**
    - **Click a checkpoint marker** → Sidebar shows detailed weather for that checkpoint at the calculated pass-through time, including a mini-timeline showing conditions ~1h before and after.
    - **Click the race course** (or a "Course Overview" button) → Sidebar shows a compact graph of weather along the entire course (x-axis: km, y-axis: key parameters).
+   - **Hover over a checkpoint marker** on the map → A dashed vertical reference line appears on all course overview charts at the checkpoint's distance position.
+   - **Hover over a data point** on a course overview chart → The corresponding checkpoint marker on the map is visually highlighted (enlarged, filled).
 
 ### 5.4 Checkpoint Detail View (Sidebar)
 
@@ -373,6 +376,9 @@ When the full course is selected:
 - Compact, stacked mini-charts (sparkline style).
 - Uncertainty ranges shown as shaded bands where available.
 - Checkpoint positions marked on x-axis.
+- Hovering a data point highlights the corresponding checkpoint marker on the map.
+- When a map checkpoint is hovered, a dashed accent-rose (`#D4687A`) reference line is drawn at that checkpoint's distance on all charts.
+- Displays the yr.no weather model run time (`yr_model_run_at`) below the charts.
 
 ### 5.6 Colour Scheme
 
@@ -742,6 +748,7 @@ The application is deployable to [Railway](https://railway.com/) as a PoC/stagin
   "checkpoint_name": "Smågan",
   "forecast_time": "2026-03-01T10:24:00+01:00",
   "fetched_at": "2026-02-28T14:30:00Z",
+  "yr_model_run_at": "2026-02-28T12:00:00Z",
   "source": "yr.no",
   "stale": false,
   "weather": {
@@ -778,14 +785,17 @@ The application is deployable to [Railway](https://railway.com/) as a PoC/stagin
   "history": [
     {
       "fetched_at": "2026-02-25T12:00:00Z",
+      "yr_model_run_at": "2026-02-25T06:00:00Z",
       "weather": { "temperature_c": -2.0, "..." : "..." }
     },
     {
       "fetched_at": "2026-02-27T12:00:00Z",
+      "yr_model_run_at": "2026-02-27T06:00:00Z",
       "weather": { "temperature_c": -3.5, "..." : "..." }
     },
     {
       "fetched_at": "2026-02-28T14:30:00Z",
+      "yr_model_run_at": "2026-02-28T12:00:00Z",
       "weather": { "temperature_c": -4.0, "..." : "..." }
     }
   ]
@@ -800,6 +810,7 @@ The application is deployable to [Railway](https://railway.com/) as a PoC/stagin
   "race_id": "uuid",
   "race_name": "Vasaloppet",
   "target_duration_hours": 8.0,
+  "yr_model_run_at": "2026-02-28T06:00:00Z",
   "checkpoints": [
     {
       "checkpoint_id": "uuid",
@@ -832,6 +843,8 @@ The application is deployable to [Railway](https://railway.com/) as a PoC/stagin
 ```
 
 > **Note:** The race-level endpoint includes uncertainty ranges (p10/p90 for temperature and wind) to support the CourseOverview shaded band charts. Percentile fields are nullable — they may be absent for long-range forecasts.
+
+> **Note:** The race-level `yr_model_run_at` is the **oldest** (minimum) model run time across all checkpoints, providing a conservative indicator of forecast freshness. The UI displays this as "Model run: {time}" in the course overview. For single-checkpoint views, `yr_model_run_at` comes directly from the individual forecast row.
 
 ---
 

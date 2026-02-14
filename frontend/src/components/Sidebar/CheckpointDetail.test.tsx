@@ -22,6 +22,7 @@ const mockForecast: ForecastResponse = {
   checkpoint_name: "Salen",
   forecast_time: "2026-03-01T07:00:00Z",
   fetched_at: "2026-02-28T12:00:00Z",
+  yr_model_run_at: "2026-02-28T06:00:00Z",
   source: "yr.no",
   stale: false,
   weather: {
@@ -211,7 +212,7 @@ describe("CheckpointDetail", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("shows source and fetched_at metadata", () => {
+  it("shows source and model run metadata", () => {
     render(
       <CheckpointDetail
         checkpoint={mockCheckpoint}
@@ -222,7 +223,7 @@ describe("CheckpointDetail", () => {
       { wrapper: createWrapper() }
     );
     expect(screen.getByText("Source: yr.no")).toBeInTheDocument();
-    expect(screen.getByText(/Last updated:/)).toBeInTheDocument();
+    expect(screen.getByText(/Model run:/)).toBeInTheDocument();
   });
 
   it("renders weather rows with aria group labels", () => {

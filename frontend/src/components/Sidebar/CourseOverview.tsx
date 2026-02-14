@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useCallback, useMemo } from "react";
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -11,6 +11,7 @@ import {
   Tooltip,
   ReferenceLine,
 } from "recharts";
+import type { CategoricalChartState } from "recharts/types/chart/types";
 import type { Checkpoint, RaceForecastResponse } from "../../api/types";
 import { chartColors, uncertaintyOpacity } from "../../styles/theme";
 import { formatTemp, formatWind, formatPrecip, windDirectionLabel, formatTimeWithZone } from "../../utils/formatting";
@@ -22,11 +23,14 @@ interface CourseOverviewProps {
   checkpoints: Checkpoint[];
   /** Whether data is loading. */
   isLoading: boolean;
-  /** When the forecast data was last fetched (ISO 8601). */
-  dataUpdatedAt: string | null;
+  /** Currently hovered checkpoint ID (from map or chart). */
+  hoveredCheckpointId: string | null;
+  /** Callback when a checkpoint is hovered/unhovered on the chart. */
+  onCheckpointHover: (id: string | null) => void;
 }
 
 interface ChartDataPoint {
+  checkpointId: string;
   name: string;
   distance: number;
   temperature: number;
@@ -50,8 +54,66 @@ const CourseOverview = memo(function CourseOverview({
   raceForecast,
   checkpoints,
   isLoading,
-  dataUpdatedAt,
+  hoveredCheckpointId,
+  onCheckpointHover,
 }: CourseOverviewProps) {
+  // Build chart data from race forecast (empty array if no data)
+  const data: ChartDataPoint[] = useMemo(() => {
+    if (!raceForecast || raceForecast.checkpoints.length === 0) return [];
+    return raceForecast.checkpoints.map((cp) => ({
+      checkpointId: cp.checkpoint_id,
+      name: cp.name.split(" ")[0] ?? cp.name,
+      distance: cp.distance_km,
+      temperature: cp.weather.temperature_c,
+      tempP10: cp.weather.temperature_percentile_10_c ?? null,
+      tempP90: cp.weather.temperature_percentile_90_c ?? null,
+      tempRange:
+        cp.weather.temperature_percentile_10_c != null &&
+        cp.weather.temperature_percentile_90_c != null
+          ? [cp.weather.temperature_percentile_10_c, cp.weather.temperature_percentile_90_c] as [number, number]
+          : null,
+      feelsLike: cp.weather.feels_like_c,
+      wind: cp.weather.wind_speed_ms,
+      windP10: cp.weather.wind_speed_percentile_10_ms ?? null,
+      windP90: cp.weather.wind_speed_percentile_90_ms ?? null,
+      windRange:
+        cp.weather.wind_speed_percentile_10_ms != null &&
+        cp.weather.wind_speed_percentile_90_ms != null
+          ? [cp.weather.wind_speed_percentile_10_ms, cp.weather.wind_speed_percentile_90_ms] as [number, number]
+          : null,
+      windDirection: windDirectionLabel(cp.weather.wind_direction_deg),
+      precipitation: cp.weather.precipitation_mm,
+    }));
+  }, [raceForecast]);
+
+  // Compute the active chart index from the hovered checkpoint ID
+  const activeIndex = useMemo(() => {
+    if (!hoveredCheckpointId || data.length === 0) return undefined;
+    const idx = data.findIndex((d) => d.checkpointId === hoveredCheckpointId);
+    return idx >= 0 ? idx : undefined;
+  }, [hoveredCheckpointId, data]);
+
+  // Distance of the hovered checkpoint (for reference line on charts)
+  const hoveredDistance = activeIndex != null ? data[activeIndex]?.distance : undefined;
+
+  // When hovering a data point on any chart, notify the parent
+  const handleChartMouseMove = useCallback(
+    (state: CategoricalChartState) => {
+      if (state?.activeTooltipIndex != null) {
+        const idx = state.activeTooltipIndex;
+        const point = data[idx];
+        if (point) {
+          onCheckpointHover(point.checkpointId);
+        }
+      }
+    },
+    [data, onCheckpointHover]
+  );
+
+  const handleChartMouseLeave = useCallback(() => {
+    onCheckpointHover(null);
+  }, [onCheckpointHover]);
+
   if (isLoading) {
     return (
       <div className="space-y-4 p-4">
@@ -70,7 +132,7 @@ const CourseOverview = memo(function CourseOverview({
     );
   }
 
-  if (!raceForecast || raceForecast.checkpoints.length === 0) {
+  if (data.length === 0) {
     return (
       <div className="p-4">
         <h2 className="text-lg font-bold text-text-primary">
@@ -84,30 +146,6 @@ const CourseOverview = memo(function CourseOverview({
       </div>
     );
   }
-
-  const data: ChartDataPoint[] = raceForecast.checkpoints.map((cp) => ({
-    name: cp.name.split(" ")[0] ?? cp.name, // Short name for x-axis
-    distance: cp.distance_km,
-    temperature: cp.weather.temperature_c,
-    tempP10: cp.weather.temperature_percentile_10_c ?? null,
-    tempP90: cp.weather.temperature_percentile_90_c ?? null,
-    tempRange:
-      cp.weather.temperature_percentile_10_c != null &&
-      cp.weather.temperature_percentile_90_c != null
-        ? [cp.weather.temperature_percentile_10_c, cp.weather.temperature_percentile_90_c]
-        : null,
-    feelsLike: cp.weather.feels_like_c,
-    wind: cp.weather.wind_speed_ms,
-    windP10: cp.weather.wind_speed_percentile_10_ms ?? null,
-    windP90: cp.weather.wind_speed_percentile_90_ms ?? null,
-    windRange:
-      cp.weather.wind_speed_percentile_10_ms != null &&
-      cp.weather.wind_speed_percentile_90_ms != null
-        ? [cp.weather.wind_speed_percentile_10_ms, cp.weather.wind_speed_percentile_90_ms]
-        : null,
-    windDirection: windDirectionLabel(cp.weather.wind_direction_deg),
-    precipitation: cp.weather.precipitation_mm,
-  }));
 
   const hasTempBands = data.some((d) => d.tempP10 !== null && d.tempP90 !== null);
   const hasWindBands = data.some((d) => d.windP10 !== null && d.windP90 !== null);
@@ -126,20 +164,24 @@ const CourseOverview = memo(function CourseOverview({
         Weather Along the Course
       </h2>
       <p className="text-xs text-text-muted">
-        {raceForecast.race_name} &middot;{" "}
-        {raceForecast.target_duration_hours}h target
+        {raceForecast!.race_name} &middot;{" "}
+        {raceForecast!.target_duration_hours}h target
       </p>
-      {dataUpdatedAt && (
+      {raceForecast!.yr_model_run_at && (
         <p className="text-xs text-text-muted">
-          Forecast retrieved: {formatTimeWithZone(dataUpdatedAt)}
+          Model run: {formatTimeWithZone(raceForecast!.yr_model_run_at)}
         </p>
       )}
 
       {/* Temperature chart */}
       <SparklineSection title="Temperature" unit="°C">
         <ResponsiveContainer width="100%" height={140}>
-          <ComposedChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
-            <XAxis
+          <ComposedChart
+            data={data}
+            margin={{ top: 5, right: 5, bottom: 5, left: 0 }}
+            onMouseMove={handleChartMouseMove}
+            onMouseLeave={handleChartMouseLeave}
+          >            <XAxis
               dataKey="distance"
               tick={{ fill: "#6B6762", fontSize: 10 }}
               tickFormatter={(v: number) => `${v}`}
@@ -165,6 +207,9 @@ const CourseOverview = memo(function CourseOverview({
               labelFormatter={(v: number) => `${v} km`}
             />
             <ReferenceLine y={0} stroke="#2C2A27" strokeDasharray="3 3" />
+            {hoveredDistance != null && (
+              <ReferenceLine x={hoveredDistance} stroke="#D4687A" strokeDasharray="3 3" strokeWidth={1} />
+            )}
             {hasTempBands && (
               <Area
                 type="monotone"
@@ -203,7 +248,12 @@ const CourseOverview = memo(function CourseOverview({
       {/* Precipitation chart */}
       <SparklineSection title="Precipitation" unit="mm">
         <ResponsiveContainer width="100%" height={110}>
-          <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
+          <BarChart
+            data={data}
+            margin={{ top: 5, right: 5, bottom: 5, left: 0 }}
+            onMouseMove={handleChartMouseMove}
+            onMouseLeave={handleChartMouseLeave}
+          >
             <XAxis
               dataKey="distance"
               tick={{ fill: "#6B6762", fontSize: 10 }}
@@ -223,6 +273,9 @@ const CourseOverview = memo(function CourseOverview({
               formatter={(value: number) => [formatPrecip(value), ""]}
               labelFormatter={(v: number) => `${v} km`}
             />
+            {hoveredDistance != null && (
+              <ReferenceLine x={hoveredDistance} stroke="#D4687A" strokeDasharray="3 3" strokeWidth={1} />
+            )}
             <Bar
               dataKey="precipitation"
               fill={chartColors.precipitation}
@@ -236,7 +289,12 @@ const CourseOverview = memo(function CourseOverview({
       {/* Wind chart */}
       <SparklineSection title="Wind Speed" unit="m/s">
          <ResponsiveContainer width="100%" height={130}>
-          <ComposedChart data={data} margin={{ top: 12, right: 5, bottom: 5, left: 0 }}>
+          <ComposedChart
+            data={data}
+            margin={{ top: 12, right: 5, bottom: 5, left: 0 }}
+            onMouseMove={handleChartMouseMove}
+            onMouseLeave={handleChartMouseLeave}
+          >
             <XAxis
               dataKey="distance"
               tick={{ fill: "#6B6762", fontSize: 10 }}
@@ -263,6 +321,9 @@ const CourseOverview = memo(function CourseOverview({
               }}
               labelFormatter={(v: number) => `${v} km`}
             />
+            {hoveredDistance != null && (
+              <ReferenceLine x={hoveredDistance} stroke="#D4687A" strokeDasharray="3 3" strokeWidth={1} />
+            )}
             {hasWindBands && (
               <Area
                 type="monotone"

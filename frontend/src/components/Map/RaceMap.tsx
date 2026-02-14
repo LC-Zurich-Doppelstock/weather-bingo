@@ -14,8 +14,12 @@ interface RaceMapProps {
   checkpoints: Checkpoint[];
   /** Currently selected checkpoint ID. */
   selectedCheckpointId: string | null;
+  /** Currently hovered checkpoint ID (from chart or map). */
+  hoveredCheckpointId: string | null;
   /** Callback when a checkpoint marker is clicked. */
   onCheckpointSelect: (id: string) => void;
+  /** Callback when a checkpoint marker is hovered/unhovered. */
+  onCheckpointHover: (id: string | null) => void;
 }
 
 /** Dark-themed tile layer URL (CartoDB Dark Matter). */
@@ -56,7 +60,9 @@ export default function RaceMap({
   course,
   checkpoints,
   selectedCheckpointId,
+  hoveredCheckpointId,
   onCheckpointSelect,
+  onCheckpointHover,
 }: RaceMapProps) {
   const mapRef = useRef(null);
 
@@ -81,7 +87,9 @@ export default function RaceMap({
           key={cp.id}
           checkpoint={cp}
           isSelected={cp.id === selectedCheckpointId}
+          isHovered={cp.id === hoveredCheckpointId}
           onClick={onCheckpointSelect}
+          onHover={onCheckpointHover}
         />
       ))}
     </MapContainer>

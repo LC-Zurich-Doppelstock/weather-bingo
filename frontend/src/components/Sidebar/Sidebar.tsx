@@ -11,10 +11,14 @@ interface SidebarProps {
   checkpoints: Checkpoint[];
   /** Currently selected checkpoint ID (null = course overview). */
   selectedCheckpointId: string | null;
+  /** Currently hovered checkpoint ID (from chart or map). */
+  hoveredCheckpointId: string | null;
   /** Target race duration in hours. */
   targetDurationHours: number;
   /** Callback to clear checkpoint selection (show course overview). */
   onClearSelection: () => void;
+  /** Callback when a checkpoint is hovered/unhovered on the chart. */
+  onCheckpointHover: (id: string | null) => void;
 }
 
 /**
@@ -25,8 +29,10 @@ export default function Sidebar({
   race,
   checkpoints,
   selectedCheckpointId,
+  hoveredCheckpointId,
   targetDurationHours,
   onClearSelection,
+  onCheckpointHover,
 }: SidebarProps) {
   const selectedCheckpoint =
     checkpoints.find((cp) => cp.id === selectedCheckpointId) ?? null;
@@ -42,7 +48,7 @@ export default function Sidebar({
     passTime
   );
 
-  const { data: raceForecast, isLoading: raceForecastLoading, dataUpdatedAt: raceForecastUpdatedAt } =
+  const { data: raceForecast, isLoading: raceForecastLoading } =
     useRaceForecast(
       !selectedCheckpointId ? race?.id ?? null : null,
       targetDurationHours
@@ -87,7 +93,8 @@ export default function Sidebar({
         raceForecast={raceForecast ?? null}
         checkpoints={checkpoints}
         isLoading={raceForecastLoading}
-        dataUpdatedAt={raceForecastUpdatedAt > 0 ? new Date(raceForecastUpdatedAt).toISOString() : null}
+        hoveredCheckpointId={hoveredCheckpointId}
+        onCheckpointHover={onCheckpointHover}
       />
     </div>
   );
