@@ -224,30 +224,15 @@ impl YrClient {
 ///
 /// This is a pure function (no I/O) — it finds the closest timeseries entry
 /// to `forecast_time` and converts it to `YrParsedForecast`.
+///
+/// Delegates to `extract_forecasts_at_times` for a single time to avoid
+/// duplicating the find-closest + parse logic.
 pub fn extract_forecast_at_time(
     raw_json: &serde_json::Value,
     forecast_time: DateTime<Utc>,
 ) -> Result<YrParsedForecast, AppError> {
-    let yr_response: YrResponse = serde_json::from_value(raw_json.clone()).map_err(|e| {
-        AppError::ExternalServiceError(format!("yr.no response structure error: {}", e))
-    })?;
-
-    let target_ts = forecast_time.timestamp();
-    let closest = yr_response
-        .properties
-        .timeseries
-        .iter()
-        .min_by_key(|ts| {
-            let ts_time = chrono::DateTime::parse_from_rfc3339(&ts.time)
-                .map(|dt| dt.timestamp())
-                .unwrap_or(0);
-            (ts_time - target_ts).unsigned_abs()
-        })
-        .ok_or_else(|| {
-            AppError::ExternalServiceError("yr.no returned empty timeseries".to_string())
-        })?;
-
-    parse_timeseries_entry(closest)
+    let mut results = extract_forecasts_at_times(raw_json, &[forecast_time])?;
+    Ok(results.remove(0))
 }
 
 /// Extract forecasts for multiple times from a single cached yr.no timeseries.

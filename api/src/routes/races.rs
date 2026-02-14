@@ -1,5 +1,6 @@
 use axum::extract::{Path, State};
 use axum::Json;
+use rust_decimal::prelude::ToPrimitive;
 use serde::Serialize;
 use sqlx::PgPool;
 use utoipa::ToSchema;
@@ -25,7 +26,6 @@ pub struct RaceListItem {
 
 impl From<models::Race> for RaceListItem {
     fn from(r: models::Race) -> Self {
-        use rust_decimal::prelude::ToPrimitive;
         Self {
             id: r.id,
             name: r.name,
@@ -55,7 +55,6 @@ pub struct RaceDetailResponse {
 
 impl From<models::RaceDetail> for RaceDetailResponse {
     fn from(r: models::RaceDetail) -> Self {
-        use rust_decimal::prelude::ToPrimitive;
         Self {
             id: r.id,
             name: r.name,
@@ -88,7 +87,6 @@ pub struct CheckpointResponse {
 
 impl From<models::Checkpoint> for CheckpointResponse {
     fn from(c: models::Checkpoint) -> Self {
-        use rust_decimal::prelude::ToPrimitive;
         Self {
             id: c.id,
             name: c.name,
@@ -156,8 +154,8 @@ pub async fn get_checkpoints(
     State(pool): State<PgPool>,
     Path(race_id): Path<Uuid>,
 ) -> Result<Json<Vec<CheckpointResponse>>, AppError> {
-    // Verify the race exists first
-    let _race = queries::get_race(&pool, race_id)
+    // Verify the race exists first (lightweight — no GPX blob)
+    let _race = queries::get_race_summary(&pool, race_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Race {} not found", race_id)))?;
 

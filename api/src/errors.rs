@@ -1,7 +1,6 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
-use serde_json::json;
 use utoipa::ToSchema;
 
 /// Standard error response body.
@@ -45,10 +44,12 @@ impl IntoResponse for AppError {
             }
         };
 
-        let body = json!({
-            "error": message,
-        });
+        (status, axum::Json(ErrorResponse { error: message })).into_response()
+    }
+}
 
-        (status, axum::Json(body)).into_response()
+impl From<crate::services::gpx::GpxError> for AppError {
+    fn from(err: crate::services::gpx::GpxError) -> Self {
+        AppError::InternalError(format!("GPX parsing error: {}", err))
     }
 }

@@ -6,6 +6,11 @@ use uuid::Uuid;
 
 use super::models::{Checkpoint, Forecast, Race, RaceDetail, YrCachedResponse};
 
+/// Forecast time tolerance window (hours). SQL queries use a ±N hour BETWEEN
+/// range so the composite index (checkpoint_id, forecast_time, fetched_at DESC)
+/// drives the scan. This constant keeps the value in sync across all queries.
+pub const FORECAST_TIME_TOLERANCE_HOURS: i32 = 3;
+
 /// Internal helper for the batch forecast query — includes an `idx` column
 /// from `WITH ORDINALITY` to preserve input ordering. All forecast fields are
 /// `Option` because of the LEFT JOIN.
@@ -73,6 +78,12 @@ impl ForecastWithIdx {
     }
 }
 use crate::services::gpx::GpxRace;
+
+/// Convert an f64 to a `Decimal`, falling back to a truncated integer representation
+/// if the float cannot be exactly represented (e.g. NaN or infinity).
+fn f64_to_dec(v: f64) -> Decimal {
+    Decimal::from_f64(v).unwrap_or_else(|| Decimal::new(v as i64, 0))
+}
 
 /// Parameters for inserting a new forecast record.
 pub struct InsertForecastParams {
@@ -290,7 +301,7 @@ pub async fn get_latest_forecast(
     checkpoint_id: Uuid,
     forecast_time: DateTime<Utc>,
 ) -> Result<Option<Forecast>, sqlx::Error> {
-    sqlx::query_as::<_, Forecast>(
+    let query = format!(
         "SELECT id, checkpoint_id, forecast_time, fetched_at, source,
                 temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
                 wind_speed_ms, wind_speed_percentile_10_ms, wind_speed_percentile_90_ms,
@@ -300,14 +311,16 @@ pub async fn get_latest_forecast(
                 feels_like_c, precipitation_type, created_at
          FROM forecasts
          WHERE checkpoint_id = $1
-           AND forecast_time BETWEEN $2 - INTERVAL '3 hours' AND $2 + INTERVAL '3 hours'
+           AND forecast_time BETWEEN $2 - INTERVAL '{h} hours' AND $2 + INTERVAL '{h} hours'
          ORDER BY ABS(EXTRACT(EPOCH FROM (forecast_time - $2))), fetched_at DESC
          LIMIT 1",
-    )
-    .bind(checkpoint_id)
-    .bind(forecast_time)
-    .fetch_optional(pool)
-    .await
+        h = FORECAST_TIME_TOLERANCE_HOURS,
+    );
+    sqlx::query_as::<_, Forecast>(&query)
+        .bind(checkpoint_id)
+        .bind(forecast_time)
+        .fetch_optional(pool)
+        .await
 }
 
 /// Batch get the latest forecast for multiple (checkpoint_id, forecast_time) pairs.
@@ -325,9 +338,7 @@ pub async fn get_latest_forecasts_batch(
     let cp_ids: Vec<Uuid> = pairs.iter().map(|(id, _)| *id).collect();
     let times: Vec<DateTime<Utc>> = pairs.iter().map(|(_, t)| *t).collect();
 
-    // Use LATERAL JOIN to get the best forecast per (checkpoint_id, forecast_time) pair.
-    // The idx column preserves input ordering.
-    let rows: Vec<ForecastWithIdx> = sqlx::query_as::<_, ForecastWithIdx>(
+    let query = format!(
         "SELECT
             p.idx,
             f.id, f.checkpoint_id, f.forecast_time, f.fetched_at, f.source,
@@ -343,15 +354,17 @@ pub async fn get_latest_forecasts_batch(
              SELECT *
              FROM forecasts
              WHERE checkpoint_id = p.cp_id
-               AND forecast_time BETWEEN p.ft - INTERVAL '3 hours' AND p.ft + INTERVAL '3 hours'
+               AND forecast_time BETWEEN p.ft - INTERVAL '{h} hours' AND p.ft + INTERVAL '{h} hours'
              ORDER BY ABS(EXTRACT(EPOCH FROM (forecast_time - p.ft))), fetched_at DESC
              LIMIT 1
          ) f ON true",
-    )
-    .bind(&cp_ids)
-    .bind(&times)
-    .fetch_all(pool)
-    .await?;
+        h = FORECAST_TIME_TOLERANCE_HOURS,
+    );
+    let rows: Vec<ForecastWithIdx> = sqlx::query_as::<_, ForecastWithIdx>(&query)
+        .bind(&cp_ids)
+        .bind(&times)
+        .fetch_all(pool)
+        .await?;
 
     // Build result vector preserving input order
     let mut results: Vec<Option<Forecast>> = vec![None; pairs.len()];
@@ -373,7 +386,7 @@ pub async fn get_forecast_history(
     checkpoint_id: Uuid,
     forecast_time: DateTime<Utc>,
 ) -> Result<Vec<Forecast>, sqlx::Error> {
-    sqlx::query_as::<_, Forecast>(
+    let query = format!(
         "SELECT id, checkpoint_id, forecast_time, fetched_at, source,
                 temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
                 wind_speed_ms, wind_speed_percentile_10_ms, wind_speed_percentile_90_ms,
@@ -386,16 +399,18 @@ pub async fn get_forecast_history(
            AND forecast_time = (
                SELECT forecast_time FROM forecasts
                WHERE checkpoint_id = $1
-                 AND forecast_time BETWEEN $2 - INTERVAL '3 hours' AND $2 + INTERVAL '3 hours'
+                 AND forecast_time BETWEEN $2 - INTERVAL '{h} hours' AND $2 + INTERVAL '{h} hours'
                ORDER BY ABS(EXTRACT(EPOCH FROM (forecast_time - $2)))
                LIMIT 1
            )
          ORDER BY fetched_at ASC",
-    )
-    .bind(checkpoint_id)
-    .bind(forecast_time)
-    .fetch_all(pool)
-    .await
+        h = FORECAST_TIME_TOLERANCE_HOURS,
+    );
+    sqlx::query_as::<_, Forecast>(&query)
+        .bind(checkpoint_id)
+        .bind(forecast_time)
+        .fetch_all(pool)
+        .await
 }
 
 /// Insert a new forecast record (append-only). No longer stores raw_response
@@ -454,14 +469,27 @@ pub async fn insert_forecast(
     .await
 }
 
+/// Get a single checkpoint by ID.
+pub async fn get_checkpoint(
+    pool: &PgPool,
+    checkpoint_id: Uuid,
+) -> Result<Option<Checkpoint>, sqlx::Error> {
+    sqlx::query_as::<_, Checkpoint>(
+        "SELECT id, race_id, name, distance_km, latitude, longitude, elevation_m, sort_order
+         FROM checkpoints WHERE id = $1",
+    )
+    .bind(checkpoint_id)
+    .fetch_optional(pool)
+    .await
+}
+
 /// Upsert a race and its checkpoints from parsed GPX data.
 ///
 /// Uses INSERT ON CONFLICT (name, year) for the race, and
 /// INSERT ON CONFLICT (race_id, sort_order) for each checkpoint.
 /// Returns the race UUID (existing or newly created).
 pub async fn upsert_race_from_gpx(pool: &PgPool, race: &GpxRace) -> Result<Uuid, sqlx::Error> {
-    let distance_km = rust_decimal::Decimal::from_f64(race.distance_km)
-        .unwrap_or_else(|| rust_decimal::Decimal::new(race.distance_km as i64, 0));
+    let distance_km = f64_to_dec(race.distance_km);
     let start_time_utc: chrono::DateTime<chrono::Utc> = race.start_time.into();
 
     // Upsert the race
@@ -487,14 +515,10 @@ pub async fn upsert_race_from_gpx(pool: &PgPool, race: &GpxRace) -> Result<Uuid,
 
     // Upsert each checkpoint
     for (i, cp) in race.checkpoints.iter().enumerate() {
-        let cp_distance = rust_decimal::Decimal::from_f64(cp.distance_km)
-            .unwrap_or_else(|| rust_decimal::Decimal::new(cp.distance_km as i64, 0));
-        let cp_lat = rust_decimal::Decimal::from_f64(cp.latitude)
-            .unwrap_or_else(|| rust_decimal::Decimal::new(cp.latitude as i64, 0));
-        let cp_lon = rust_decimal::Decimal::from_f64(cp.longitude)
-            .unwrap_or_else(|| rust_decimal::Decimal::new(cp.longitude as i64, 0));
-        let cp_ele = rust_decimal::Decimal::from_f64(cp.elevation_m)
-            .unwrap_or_else(|| rust_decimal::Decimal::new(cp.elevation_m as i64, 0));
+        let cp_distance = f64_to_dec(cp.distance_km);
+        let cp_lat = f64_to_dec(cp.latitude);
+        let cp_lon = f64_to_dec(cp.longitude);
+        let cp_ele = f64_to_dec(cp.elevation_m);
         let sort_order = i as i32;
 
         sqlx::query(

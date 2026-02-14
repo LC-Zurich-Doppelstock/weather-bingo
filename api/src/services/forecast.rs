@@ -254,13 +254,14 @@ pub struct CheckpointWithTime {
 }
 
 /// Result of resolving a forecast for a checkpoint.
-#[allow(dead_code)]
 #[derive(Clone)]
 pub struct ResolvedForecast {
-    pub checkpoint_id: Uuid,
     pub forecast: Forecast,
+    /// Whether this result is served from stale cache (yr.no was unreachable).
+    /// Currently unused by the race handler but preserved for future use
+    /// (e.g. setting X-Forecast-Stale header on race responses).
+    #[allow(dead_code)]
     pub is_stale: bool,
-    pub forecast_time: DateTime<Utc>,
 }
 
 /// Resolve forecasts for multiple checkpoints in a race, efficiently.
@@ -317,17 +318,15 @@ pub async fn resolve_race_forecasts(
     let mut results: Vec<Option<ResolvedForecast>> = vec![None; n];
     let mut need_yr: Vec<usize> = Vec::new();
 
-    for (i, cpwt) in checkpoints.iter().enumerate() {
+    for i in 0..n {
         if let Some(ref forecast) = cached_forecasts[i] {
             let loc = &locations[i];
 
             // Cache is valid if yr.no response hasn't expired
             if valid_set.contains(loc) {
                 results[i] = Some(ResolvedForecast {
-                    checkpoint_id: cpwt.checkpoint.id,
                     forecast: forecast.clone(),
                     is_stale: false,
-                    forecast_time: cpwt.forecast_time,
                 });
                 continue;
             }
@@ -336,10 +335,8 @@ pub async fn resolve_race_forecasts(
             let age = Utc::now() - forecast.fetched_at;
             if age.num_seconds() < staleness_secs as i64 {
                 results[i] = Some(ResolvedForecast {
-                    checkpoint_id: cpwt.checkpoint.id,
                     forecast: forecast.clone(),
                     is_stale: false,
-                    forecast_time: cpwt.forecast_time,
                 });
                 continue;
             }
@@ -406,10 +403,8 @@ pub async fn resolve_race_forecasts(
                     .await?;
 
                     results[cp_idx] = Some(ResolvedForecast {
-                        checkpoint_id: checkpoints[cp_idx].checkpoint.id,
                         forecast,
                         is_stale: false,
-                        forecast_time: checkpoints[cp_idx].forecast_time,
                     });
                 }
             }
@@ -426,10 +421,8 @@ pub async fn resolve_race_forecasts(
                             e
                         );
                         results[cp_idx] = Some(ResolvedForecast {
-                            checkpoint_id: cpwt.checkpoint.id,
                             forecast: forecast.clone(),
                             is_stale: true,
-                            forecast_time: cpwt.forecast_time,
                         });
                     } else {
                         return Err(AppError::ExternalServiceError(format!(
@@ -495,16 +488,9 @@ async fn insert_parsed_forecast(
 
 /// Resolve a checkpoint by ID from the database.
 pub async fn get_checkpoint(pool: &PgPool, checkpoint_id: Uuid) -> Result<Checkpoint, AppError> {
-    let checkpoint = sqlx::query_as::<_, Checkpoint>(
-        "SELECT id, race_id, name, distance_km, latitude, longitude, elevation_m, sort_order
-         FROM checkpoints WHERE id = $1",
-    )
-    .bind(checkpoint_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound(format!("Checkpoint {} not found", checkpoint_id)))?;
-
-    Ok(checkpoint)
+    queries::get_checkpoint(pool, checkpoint_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Checkpoint {} not found", checkpoint_id)))
 }
 
 #[cfg(test)]
