@@ -139,6 +139,9 @@ pub struct ForecastResponse {
 pub struct ForecastHistoryEntry {
     /// When this version of the forecast was fetched (ISO 8601)
     pub fetched_at: String,
+    /// When yr.no's weather model generated this forecast (ISO 8601).
+    /// Null for older rows that predate this tracking.
+    pub yr_model_run_at: Option<String>,
     /// Weather data at this fetch time
     pub weather: ForecastWeather,
 }
@@ -315,6 +318,7 @@ pub async fn get_checkpoint_forecast_history(
         .iter()
         .map(|f| ForecastHistoryEntry {
             fetched_at: f.fetched_at.to_rfc3339(),
+            yr_model_run_at: f.yr_model_run_at.map(|dt| dt.to_rfc3339()),
             weather: ForecastWeather::from(f),
         })
         .collect();

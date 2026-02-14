@@ -55,6 +55,9 @@ pub struct YrParsedForecast {
     pub cloud_cover_pct: Decimal,
     pub uv_index: Option<Decimal>,
     pub symbol_code: String,
+    /// When yr.no's weather model generated this forecast (`properties.meta.updated_at`).
+    /// `None` if the meta block is missing or unparseable.
+    pub yr_model_run_at: Option<DateTime<Utc>>,
 }
 
 // --- yr.no JSON response types ---
@@ -65,7 +68,14 @@ struct YrResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct YrMeta {
+    /// When the yr.no weather model generated this forecast.
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct YrProperties {
+    meta: Option<YrMeta>,
     timeseries: Vec<YrTimeseries>,
 }
 
@@ -247,6 +257,18 @@ pub fn extract_forecasts_at_times(
         AppError::ExternalServiceError(format!("yr.no response structure error: {}", e))
     })?;
 
+    // Parse model run timestamp from meta.updated_at
+    let yr_model_run_at = yr_response
+        .properties
+        .meta
+        .as_ref()
+        .and_then(|m| m.updated_at.as_deref())
+        .and_then(|s| {
+            DateTime::parse_from_rfc3339(s)
+                .map(|dt| dt.with_timezone(&Utc))
+                .ok()
+        });
+
     let timeseries = &yr_response.properties.timeseries;
     if timeseries.is_empty() {
         return Err(AppError::ExternalServiceError(
@@ -270,7 +292,9 @@ pub fn extract_forecasts_at_times(
                 AppError::ExternalServiceError("yr.no returned empty timeseries".to_string())
             })?;
 
-        results.push(parse_timeseries_entry(closest)?);
+        let mut parsed = parse_timeseries_entry(closest)?;
+        parsed.yr_model_run_at = yr_model_run_at;
+        results.push(parsed);
     }
 
     Ok(results)
@@ -314,6 +338,8 @@ fn parse_timeseries_entry(entry: &YrTimeseries) -> Result<YrParsedForecast, AppE
         cloud_cover_pct: f64_to_decimal(instant.cloud_area_fraction.unwrap_or(0.0)),
         uv_index: opt_f64_to_decimal(instant.ultraviolet_index_clear_sky),
         symbol_code,
+        // Set to None here; overwritten by extract_forecasts_at_times after parsing meta.
+        yr_model_run_at: None,
     })
 }
 
@@ -460,6 +486,47 @@ mod tests {
         // Should pick the closest entry (07:00 is 30 min away, 08:00 is 30 min away,
         // min_by_key picks the first in case of tie = 07:00)
         assert_eq!(result.temperature_c, Decimal::from_str("-5.0").unwrap());
+        // No meta block — yr_model_run_at should be None
+        assert_eq!(result.yr_model_run_at, None);
+    }
+
+    #[test]
+    fn test_extract_forecast_with_meta_updated_at() {
+        let json = serde_json::json!({
+            "type": "Feature",
+            "properties": {
+                "meta": {
+                    "updated_at": "2026-02-28T14:23:45Z"
+                },
+                "timeseries": [
+                    {
+                        "time": "2026-03-01T07:00:00Z",
+                        "data": {
+                            "instant": {
+                                "details": {
+                                    "air_temperature": -5.0,
+                                    "wind_speed": 3.2,
+                                    "wind_from_direction": 180.0,
+                                    "relative_humidity": 75.0,
+                                    "dew_point_temperature": -8.5,
+                                    "cloud_area_fraction": 50.0
+                                }
+                            },
+                            "next_1_hours": {
+                                "summary": { "symbol_code": "cloudy" },
+                                "details": { "precipitation_amount": 0.0 }
+                            }
+                        }
+                    }
+                ]
+            }
+        });
+
+        let ft = "2026-03-01T07:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let result = extract_forecast_at_time(&json, ft).unwrap();
+        assert_eq!(result.temperature_c, Decimal::from_str("-5.0").unwrap());
+        let expected_model_run = "2026-02-28T14:23:45Z".parse::<DateTime<Utc>>().unwrap();
+        assert_eq!(result.yr_model_run_at, Some(expected_model_run));
     }
 
     #[test]

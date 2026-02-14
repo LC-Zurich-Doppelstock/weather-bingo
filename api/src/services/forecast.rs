@@ -551,12 +551,40 @@ pub async fn resolve_race_forecasts(
 }
 
 /// Compute derived fields and insert a parsed yr.no forecast into the DB.
+///
+/// Deduplicates by (checkpoint_id, forecast_time, yr_model_run_at): if a row
+/// with the same model run already exists, returns the existing row instead of
+/// inserting a duplicate.
 async fn insert_parsed_forecast(
     pool: &PgPool,
     checkpoint_id: Uuid,
     forecast_time: DateTime<Utc>,
     parsed: &crate::services::yr::YrParsedForecast,
 ) -> Result<Forecast, AppError> {
+    // Deduplication: skip insert if same model run already stored
+    if queries::forecast_exists_for_model_run(
+        pool,
+        checkpoint_id,
+        forecast_time,
+        parsed.yr_model_run_at,
+    )
+    .await?
+    {
+        // Already have this model run — return the latest forecast from DB
+        if let Some(existing) =
+            queries::get_latest_forecast(pool, checkpoint_id, forecast_time).await?
+        {
+            tracing::debug!(
+                "Skipping duplicate insert for checkpoint {} at {} (model run {:?})",
+                checkpoint_id,
+                forecast_time,
+                parsed.yr_model_run_at,
+            );
+            return Ok(existing);
+        }
+        // Shouldn't happen: exists check passed but get returned None. Fall through to insert.
+    }
+
     let temp_c = parsed.temperature_c.to_f64().unwrap_or(0.0);
     let wind_ms = parsed.wind_speed_ms.to_f64().unwrap_or(0.0);
     let precip_mm = parsed.precipitation_mm.to_f64().unwrap_or(0.0);
@@ -591,6 +619,7 @@ async fn insert_parsed_forecast(
             symbol_code: parsed.symbol_code.clone(),
             feels_like_c: feels_like_dec,
             precipitation_type: precip_type,
+            yr_model_run_at: parsed.yr_model_run_at,
         },
     )
     .await?;

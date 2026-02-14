@@ -86,5 +86,9 @@ pub struct Forecast {
     pub feels_like_c: Decimal,
     pub precipitation_type: String,
 
+    /// When yr.no's weather model generated this forecast.
+    /// NULL for rows created before this column was added.
+    pub yr_model_run_at: Option<DateTime<Utc>>,
+
     pub created_at: DateTime<Utc>,
 }

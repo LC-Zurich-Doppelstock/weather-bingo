@@ -42,6 +42,7 @@ pub struct ForecastWithIdx {
     pub symbol_code: Option<String>,
     pub feels_like_c: Option<Decimal>,
     pub precipitation_type: Option<String>,
+    pub yr_model_run_at: Option<DateTime<Utc>>,
     pub created_at: Option<DateTime<Utc>>,
 }
 
@@ -73,6 +74,7 @@ impl ForecastWithIdx {
             symbol_code: self.symbol_code?,
             feels_like_c: self.feels_like_c?,
             precipitation_type: self.precipitation_type?,
+            yr_model_run_at: self.yr_model_run_at,
             created_at: self.created_at?,
         })
     }
@@ -109,6 +111,7 @@ pub struct InsertForecastParams {
     pub symbol_code: String,
     pub feels_like_c: Decimal,
     pub precipitation_type: String,
+    pub yr_model_run_at: Option<DateTime<Utc>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -308,11 +311,13 @@ pub async fn get_latest_forecast(
                 wind_direction_deg, wind_gust_ms,
                 precipitation_mm, precipitation_min_mm, precipitation_max_mm,
                 humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-                feels_like_c, precipitation_type, created_at
+                feels_like_c, precipitation_type, yr_model_run_at, created_at
          FROM forecasts
          WHERE checkpoint_id = $1
            AND forecast_time BETWEEN $2 - INTERVAL '{h} hours' AND $2 + INTERVAL '{h} hours'
-         ORDER BY ABS(EXTRACT(EPOCH FROM (forecast_time - $2))), fetched_at DESC
+         ORDER BY ABS(EXTRACT(EPOCH FROM (forecast_time - $2))),
+                  yr_model_run_at DESC NULLS LAST,
+                  fetched_at DESC
          LIMIT 1",
         h = FORECAST_TIME_TOLERANCE_HOURS,
     );
@@ -347,7 +352,7 @@ pub async fn get_latest_forecasts_batch(
             f.wind_direction_deg, f.wind_gust_ms,
             f.precipitation_mm, f.precipitation_min_mm, f.precipitation_max_mm,
             f.humidity_pct, f.dew_point_c, f.cloud_cover_pct, f.uv_index, f.symbol_code,
-            f.feels_like_c, f.precipitation_type, f.created_at
+            f.feels_like_c, f.precipitation_type, f.yr_model_run_at, f.created_at
          FROM UNNEST($1::uuid[], $2::timestamptz[])
               WITH ORDINALITY AS p(cp_id, ft, idx)
          LEFT JOIN LATERAL (
@@ -355,7 +360,9 @@ pub async fn get_latest_forecasts_batch(
              FROM forecasts
              WHERE checkpoint_id = p.cp_id
                AND forecast_time BETWEEN p.ft - INTERVAL '{h} hours' AND p.ft + INTERVAL '{h} hours'
-             ORDER BY ABS(EXTRACT(EPOCH FROM (forecast_time - p.ft))), fetched_at DESC
+             ORDER BY ABS(EXTRACT(EPOCH FROM (forecast_time - p.ft))),
+                      yr_model_run_at DESC NULLS LAST,
+                      fetched_at DESC
              LIMIT 1
          ) f ON true",
         h = FORECAST_TIME_TOLERANCE_HOURS,
@@ -393,7 +400,7 @@ pub async fn get_forecast_history(
                 wind_direction_deg, wind_gust_ms,
                 precipitation_mm, precipitation_min_mm, precipitation_max_mm,
                 humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-                feels_like_c, precipitation_type, created_at
+                feels_like_c, precipitation_type, yr_model_run_at, created_at
          FROM forecasts
          WHERE checkpoint_id = $1
            AND forecast_time = (
@@ -413,6 +420,35 @@ pub async fn get_forecast_history(
         .await
 }
 
+/// Check if a forecast already exists for this (checkpoint, forecast_time, model_run).
+/// Used for deduplication: re-fetching the same yr.no model run should not create
+/// duplicate rows. If `yr_model_run_at` is None, always returns false (no dedup
+/// possible without model run info).
+pub async fn forecast_exists_for_model_run(
+    pool: &PgPool,
+    checkpoint_id: Uuid,
+    forecast_time: DateTime<Utc>,
+    yr_model_run_at: Option<DateTime<Utc>>,
+) -> Result<bool, sqlx::Error> {
+    let Some(model_run) = yr_model_run_at else {
+        return Ok(false);
+    };
+    let row: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 as exists_flag
+         FROM forecasts
+         WHERE checkpoint_id = $1
+           AND forecast_time = $2
+           AND yr_model_run_at = $3
+         LIMIT 1",
+    )
+    .bind(checkpoint_id)
+    .bind(forecast_time)
+    .bind(model_run)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some())
+}
+
 /// Insert a new forecast record (append-only). No longer stores raw_response
 /// (that lives in yr_responses now).
 pub async fn insert_forecast(
@@ -427,12 +463,12 @@ pub async fn insert_forecast(
             wind_direction_deg, wind_gust_ms,
             precipitation_mm, precipitation_min_mm, precipitation_max_mm,
             humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-            feels_like_c, precipitation_type, created_at
+            feels_like_c, precipitation_type, yr_model_run_at, created_at
         ) VALUES (
             $1, $2, $3, $4, $5,
             $6, $7, $8, $9, $10, $11, $12, $13,
             $14, $15, $16, $17, $18, $19, $20, $21,
-            $22, $23, NOW()
+            $22, $23, $24, NOW()
         )
         RETURNING id, checkpoint_id, forecast_time, fetched_at, source,
                   temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
@@ -440,7 +476,7 @@ pub async fn insert_forecast(
                   wind_direction_deg, wind_gust_ms,
                   precipitation_mm, precipitation_min_mm, precipitation_max_mm,
                   humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-                  feels_like_c, precipitation_type, created_at",
+                  feels_like_c, precipitation_type, yr_model_run_at, created_at",
     )
     .bind(Uuid::new_v4())
     .bind(params.checkpoint_id)
@@ -465,6 +501,7 @@ pub async fn insert_forecast(
     .bind(&params.symbol_code)
     .bind(params.feels_like_c)
     .bind(&params.precipitation_type)
+    .bind(params.yr_model_run_at)
     .fetch_one(pool)
     .await
 }
