@@ -5,6 +5,73 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::models::{Checkpoint, Forecast, Race, RaceDetail, YrCachedResponse};
+
+/// Internal helper for the batch forecast query — includes an `idx` column
+/// from `WITH ORDINALITY` to preserve input ordering. All forecast fields are
+/// `Option` because of the LEFT JOIN.
+#[derive(Debug, sqlx::FromRow)]
+pub struct ForecastWithIdx {
+    pub idx: i64,
+
+    // All forecast columns are Option due to LEFT JOIN LATERAL
+    pub id: Option<Uuid>,
+    pub checkpoint_id: Option<Uuid>,
+    pub forecast_time: Option<DateTime<Utc>>,
+    pub fetched_at: Option<DateTime<Utc>>,
+    pub source: Option<String>,
+    pub temperature_c: Option<Decimal>,
+    pub temperature_percentile_10_c: Option<Decimal>,
+    pub temperature_percentile_90_c: Option<Decimal>,
+    pub wind_speed_ms: Option<Decimal>,
+    pub wind_speed_percentile_10_ms: Option<Decimal>,
+    pub wind_speed_percentile_90_ms: Option<Decimal>,
+    pub wind_direction_deg: Option<Decimal>,
+    pub wind_gust_ms: Option<Decimal>,
+    pub precipitation_mm: Option<Decimal>,
+    pub precipitation_min_mm: Option<Decimal>,
+    pub precipitation_max_mm: Option<Decimal>,
+    pub humidity_pct: Option<Decimal>,
+    pub dew_point_c: Option<Decimal>,
+    pub cloud_cover_pct: Option<Decimal>,
+    pub uv_index: Option<Decimal>,
+    pub symbol_code: Option<String>,
+    pub feels_like_c: Option<Decimal>,
+    pub precipitation_type: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+impl ForecastWithIdx {
+    /// Convert to a Forecast if the LEFT JOIN found a matching row.
+    /// Returns None if all forecast fields are NULL (no match).
+    pub fn into_forecast(self) -> Option<Forecast> {
+        Some(Forecast {
+            id: self.id?,
+            checkpoint_id: self.checkpoint_id?,
+            forecast_time: self.forecast_time?,
+            fetched_at: self.fetched_at?,
+            source: self.source?,
+            temperature_c: self.temperature_c?,
+            temperature_percentile_10_c: self.temperature_percentile_10_c,
+            temperature_percentile_90_c: self.temperature_percentile_90_c,
+            wind_speed_ms: self.wind_speed_ms?,
+            wind_speed_percentile_10_ms: self.wind_speed_percentile_10_ms,
+            wind_speed_percentile_90_ms: self.wind_speed_percentile_90_ms,
+            wind_direction_deg: self.wind_direction_deg?,
+            wind_gust_ms: self.wind_gust_ms,
+            precipitation_mm: self.precipitation_mm?,
+            precipitation_min_mm: self.precipitation_min_mm,
+            precipitation_max_mm: self.precipitation_max_mm,
+            humidity_pct: self.humidity_pct?,
+            dew_point_c: self.dew_point_c?,
+            cloud_cover_pct: self.cloud_cover_pct?,
+            uv_index: self.uv_index,
+            symbol_code: self.symbol_code?,
+            feels_like_c: self.feels_like_c?,
+            precipitation_type: self.precipitation_type?,
+            created_at: self.created_at?,
+        })
+    }
+}
 use crate::services::gpx::GpxRace;
 
 /// Parameters for inserting a new forecast record.
@@ -56,6 +123,61 @@ pub async fn get_yr_cached_response(
     .bind(elevation_m)
     .fetch_optional(pool)
     .await
+}
+
+/// Lightweight check: is a non-expired yr.no cached response available?
+/// Returns true/false without transferring the large raw_response blob.
+pub async fn is_yr_cache_valid(
+    pool: &PgPool,
+    latitude: Decimal,
+    longitude: Decimal,
+    elevation_m: Decimal,
+) -> Result<bool, sqlx::Error> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 as exists_flag
+         FROM yr_responses
+         WHERE latitude = $1 AND longitude = $2 AND elevation_m = $3
+           AND expires_at > NOW()
+         LIMIT 1",
+    )
+    .bind(latitude)
+    .bind(longitude)
+    .bind(elevation_m)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some())
+}
+
+/// Batch check: which of the given locations have valid (non-expired) yr.no cache?
+/// Returns the set of (latitude, longitude, elevation_m) tuples that are valid.
+/// Executes as a single query regardless of how many locations are checked.
+pub async fn get_valid_yr_cache_locations(
+    pool: &PgPool,
+    locations: &[(Decimal, Decimal, Decimal)],
+) -> Result<Vec<(Decimal, Decimal, Decimal)>, sqlx::Error> {
+    if locations.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let lats: Vec<Decimal> = locations.iter().map(|(l, _, _)| *l).collect();
+    let lons: Vec<Decimal> = locations.iter().map(|(_, l, _)| *l).collect();
+    let eles: Vec<Decimal> = locations.iter().map(|(_, _, e)| *e).collect();
+
+    let rows: Vec<(Decimal, Decimal, Decimal)> = sqlx::query_as(
+        "SELECT yr.latitude, yr.longitude, yr.elevation_m
+         FROM yr_responses yr
+         INNER JOIN UNNEST($1::numeric[], $2::numeric[], $3::numeric[])
+           AS loc(lat, lon, ele)
+           ON yr.latitude = loc.lat AND yr.longitude = loc.lon AND yr.elevation_m = loc.ele
+         WHERE yr.expires_at > NOW()",
+    )
+    .bind(&lats)
+    .bind(&lons)
+    .bind(&eles)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
 }
 
 /// Get a cached yr.no response for a location regardless of expiry (for If-Modified-Since).
@@ -186,6 +308,62 @@ pub async fn get_latest_forecast(
     .bind(forecast_time)
     .fetch_optional(pool)
     .await
+}
+
+/// Batch get the latest forecast for multiple (checkpoint_id, forecast_time) pairs.
+///
+/// Returns one Forecast per input pair (in the same order), or None if no
+/// forecast exists for that pair. Executes as a single query using LATERAL JOIN.
+pub async fn get_latest_forecasts_batch(
+    pool: &PgPool,
+    pairs: &[(Uuid, DateTime<Utc>)],
+) -> Result<Vec<Option<Forecast>>, sqlx::Error> {
+    if pairs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let cp_ids: Vec<Uuid> = pairs.iter().map(|(id, _)| *id).collect();
+    let times: Vec<DateTime<Utc>> = pairs.iter().map(|(_, t)| *t).collect();
+
+    // Use LATERAL JOIN to get the best forecast per (checkpoint_id, forecast_time) pair.
+    // The idx column preserves input ordering.
+    let rows: Vec<ForecastWithIdx> = sqlx::query_as::<_, ForecastWithIdx>(
+        "SELECT
+            p.idx,
+            f.id, f.checkpoint_id, f.forecast_time, f.fetched_at, f.source,
+            f.temperature_c, f.temperature_percentile_10_c, f.temperature_percentile_90_c,
+            f.wind_speed_ms, f.wind_speed_percentile_10_ms, f.wind_speed_percentile_90_ms,
+            f.wind_direction_deg, f.wind_gust_ms,
+            f.precipitation_mm, f.precipitation_min_mm, f.precipitation_max_mm,
+            f.humidity_pct, f.dew_point_c, f.cloud_cover_pct, f.uv_index, f.symbol_code,
+            f.feels_like_c, f.precipitation_type, f.created_at
+         FROM UNNEST($1::uuid[], $2::timestamptz[])
+              WITH ORDINALITY AS p(cp_id, ft, idx)
+         LEFT JOIN LATERAL (
+             SELECT *
+             FROM forecasts
+             WHERE checkpoint_id = p.cp_id
+               AND forecast_time BETWEEN p.ft - INTERVAL '3 hours' AND p.ft + INTERVAL '3 hours'
+             ORDER BY ABS(EXTRACT(EPOCH FROM (forecast_time - p.ft))), fetched_at DESC
+             LIMIT 1
+         ) f ON true",
+    )
+    .bind(&cp_ids)
+    .bind(&times)
+    .fetch_all(pool)
+    .await?;
+
+    // Build result vector preserving input order
+    let mut results: Vec<Option<Forecast>> = vec![None; pairs.len()];
+    for row in rows {
+        let idx = (row.idx - 1) as usize; // ORDINALITY is 1-based
+                                          // If the LEFT JOIN found no match, the forecast fields will be NULL
+        if let Some(forecast) = row.into_forecast() {
+            results[idx] = Some(forecast);
+        }
+    }
+
+    Ok(results)
 }
 
 /// Get forecast history for a checkpoint at a specific forecast time.

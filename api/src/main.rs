@@ -77,6 +77,7 @@ async fn main() {
     // Set up database connection pool
     let pool = PgPoolOptions::new()
         .max_connections(5)
+        .min_connections(2)
         .connect(&config.database_url)
         .await
         .expect("Failed to connect to database");

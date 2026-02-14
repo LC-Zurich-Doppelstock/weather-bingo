@@ -195,7 +195,8 @@ pub async fn resolve_forecast(
     // than staleness_secs.
     if let Some(ref forecast) = cached {
         // Quick check: is the yr_responses cache still valid for this location?
-        let yr_cache = queries::get_yr_cached_response(
+        // Uses lightweight query — no blob transfer.
+        let yr_valid = queries::is_yr_cache_valid(
             pool,
             checkpoint.latitude,
             checkpoint.longitude,
@@ -203,7 +204,7 @@ pub async fn resolve_forecast(
         )
         .await?;
 
-        if yr_cache.is_some() {
+        if yr_valid {
             // yr.no data hasn't expired yet, so our DB forecast is current
             return Ok((forecast.clone(), false));
         }
@@ -254,6 +255,7 @@ pub struct CheckpointWithTime {
 
 /// Result of resolving a forecast for a checkpoint.
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct ResolvedForecast {
     pub checkpoint_id: Uuid,
     pub forecast: Forecast,
@@ -263,34 +265,64 @@ pub struct ResolvedForecast {
 
 /// Resolve forecasts for multiple checkpoints in a race, efficiently.
 ///
-/// Groups checkpoints by location (lat/lon/elevation), makes one yr.no call
-/// per unique location (in parallel), then extracts individual forecasts from
-/// each cached timeseries.
+/// Uses batched DB queries to minimise round-trips:
+///   1. One query to fetch the latest forecast for ALL checkpoints
+///   2. One query to check yr.no cache validity for ALL locations
+///   3. Only for stale/missing data: parallel yr.no fetches + inserts
+///
+/// Warm-cache happy path: **2 DB queries** total (regardless of checkpoint count).
 pub async fn resolve_race_forecasts(
     pool: &PgPool,
     yr_client: &YrClient,
     checkpoints: &[CheckpointWithTime],
     staleness_secs: u64,
 ) -> Result<Vec<ResolvedForecast>, AppError> {
-    // 1. Check which checkpoints already have fresh DB forecasts
-    let mut results: Vec<Option<ResolvedForecast>> = (0..checkpoints.len()).map(|_| None).collect();
-    let mut need_yr: Vec<usize> = Vec::new(); // indices into `checkpoints` that need yr.no data
+    let n = checkpoints.len();
 
-    for (i, cpwt) in checkpoints.iter().enumerate() {
-        let cached =
-            queries::get_latest_forecast(pool, cpwt.checkpoint.id, cpwt.forecast_time).await?;
+    // ── Step 1: Batch-fetch latest forecasts for all checkpoints (1 query) ──
+    let pairs: Vec<(Uuid, DateTime<Utc>)> = checkpoints
+        .iter()
+        .map(|cpwt| (cpwt.checkpoint.id, cpwt.forecast_time))
+        .collect();
 
-        if let Some(ref forecast) = cached {
-            // Check if yr_responses cache is still valid
-            let yr_cache = queries::get_yr_cached_response(
-                pool,
+    let cached_forecasts = queries::get_latest_forecasts_batch(pool, &pairs).await?;
+
+    // ── Step 2: Batch-check yr.no cache validity for all locations (1 query) ──
+    let locations: Vec<(Decimal, Decimal, Decimal)> = checkpoints
+        .iter()
+        .map(|cpwt| {
+            (
                 cpwt.checkpoint.latitude,
                 cpwt.checkpoint.longitude,
                 cpwt.checkpoint.elevation_m,
             )
-            .await?;
+        })
+        .collect();
 
-            if yr_cache.is_some() {
+    // De-duplicate locations before querying (many checkpoints share coordinates)
+    let unique_locations: Vec<(Decimal, Decimal, Decimal)> = {
+        let mut seen = std::collections::HashSet::new();
+        locations
+            .iter()
+            .filter(|loc| seen.insert(**loc))
+            .copied()
+            .collect()
+    };
+
+    let valid_locations = queries::get_valid_yr_cache_locations(pool, &unique_locations).await?;
+    let valid_set: std::collections::HashSet<(Decimal, Decimal, Decimal)> =
+        valid_locations.into_iter().collect();
+
+    // ── Step 3: Classify each checkpoint ──
+    let mut results: Vec<Option<ResolvedForecast>> = vec![None; n];
+    let mut need_yr: Vec<usize> = Vec::new();
+
+    for (i, cpwt) in checkpoints.iter().enumerate() {
+        if let Some(ref forecast) = cached_forecasts[i] {
+            let loc = &locations[i];
+
+            // Cache is valid if yr.no response hasn't expired
+            if valid_set.contains(loc) {
                 results[i] = Some(ResolvedForecast {
                     checkpoint_id: cpwt.checkpoint.id,
                     forecast: forecast.clone(),
@@ -317,11 +349,11 @@ pub async fn resolve_race_forecasts(
     }
 
     if need_yr.is_empty() {
-        // All from cache
+        // All from cache — total cost: 2 DB queries
         return Ok(results.into_iter().map(|r| r.unwrap()).collect());
     }
 
-    // 2. Group checkpoints needing yr.no data by location
+    // ── Step 4: Group stale checkpoints by location, fetch in parallel ──
     let mut location_groups: HashMap<LocationKey, Vec<usize>> = HashMap::new();
     for &idx in &need_yr {
         let cp = &checkpoints[idx].checkpoint;
@@ -333,7 +365,6 @@ pub async fn resolve_race_forecasts(
         location_groups.entry(key).or_default().push(idx);
     }
 
-    // 3. Fetch yr.no timeseries in parallel for each unique location
     let mut fetch_futures = Vec::new();
     let location_keys: Vec<LocationKey> = location_groups.keys().cloned().collect();
 
@@ -350,14 +381,13 @@ pub async fn resolve_race_forecasts(
 
     let fetch_results = futures::future::join_all(fetch_futures).await;
 
-    // 4. For each location, extract forecasts for all checkpoints at that location
+    // ── Step 5: Extract + insert forecasts for fetched locations ──
     for (loc_idx, fetch_result) in fetch_results.into_iter().enumerate() {
         let key = &location_keys[loc_idx];
         let cp_indices = &location_groups[key];
 
         match fetch_result {
             Ok(raw_json) => {
-                // Collect forecast times for batch extraction
                 let forecast_times: Vec<DateTime<Utc>> = cp_indices
                     .iter()
                     .map(|&idx| checkpoints[idx].forecast_time)
@@ -384,14 +414,11 @@ pub async fn resolve_race_forecasts(
                 }
             }
             Err(e) => {
-                // yr.no failed for this location — try stale cache for each checkpoint
+                // yr.no failed — return stale data from the batch we already fetched
                 for &cp_idx in cp_indices {
                     let cpwt = &checkpoints[cp_idx];
-                    let cached =
-                        queries::get_latest_forecast(pool, cpwt.checkpoint.id, cpwt.forecast_time)
-                            .await?;
 
-                    if let Some(forecast) = cached {
+                    if let Some(ref forecast) = cached_forecasts[cp_idx] {
                         tracing::warn!(
                             "yr.no unavailable for location ({}, {}), returning stale data: {}",
                             key.latitude,
@@ -400,7 +427,7 @@ pub async fn resolve_race_forecasts(
                         );
                         results[cp_idx] = Some(ResolvedForecast {
                             checkpoint_id: cpwt.checkpoint.id,
-                            forecast,
+                            forecast: forecast.clone(),
                             is_stale: true,
                             forecast_time: cpwt.forecast_time,
                         });
