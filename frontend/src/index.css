@@ -2,18 +2,18 @@
 
 /* Custom theme colours for Tailwind v4 */
 @theme {
-  --color-background: #0A0F0D;
-  --color-surface: #141E1B;
-  --color-surface-alt: #1C2B27;
+  --color-background: #0D0D0C;
+  --color-surface: #171614;
+  --color-surface-alt: #1F1E1C;
   --color-primary: #2DD4A8;
   --color-primary-hover: #34EBB9;
   --color-secondary: #14B8A6;
   --color-accent-warm: #F5A623;
   --color-accent-cool: #7C8CF5;
-  --color-text-primary: #F0F7F4;
-  --color-text-secondary: #8BA89E;
-  --color-text-muted: #5A7A6E;
-  --color-border: #2A3F38;
+  --color-text-primary: #F0EEEB;
+  --color-text-secondary: #9E9A93;
+  --color-text-muted: #6B6762;
+  --color-border: #2C2A27;
   --color-error: #EF4444;
   --color-success: #2DD4A8;
 }

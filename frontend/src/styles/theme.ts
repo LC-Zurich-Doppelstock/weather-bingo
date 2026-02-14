@@ -6,18 +6,18 @@
 
 // UI Colours
 export const colors = {
-  background: "#0A0F0D",
-  surface: "#141E1B",
-  surfaceAlt: "#1C2B27",
+  background: "#0D0D0C",
+  surface: "#171614",
+  surfaceAlt: "#1F1E1C",
   primary: "#2DD4A8",
   primaryHover: "#34EBB9",
   secondary: "#14B8A6",
   accentWarm: "#F5A623",
   accentCool: "#7C8CF5",
-  textPrimary: "#F0F7F4",
-  textSecondary: "#8BA89E",
-  textMuted: "#5A7A6E",
-  border: "#2A3F38",
+  textPrimary: "#F0EEEB",
+  textSecondary: "#9E9A93",
+  textMuted: "#6B6762",
+  border: "#2C2A27",
   error: "#EF4444",
   success: "#2DD4A8",
 } as const;

@@ -113,10 +113,10 @@ const CourseOverview = memo(function CourseOverview({
   const hasWindBands = data.some((d) => d.windP10 !== null && d.windP90 !== null);
 
   const tooltipStyle = {
-    backgroundColor: "#141E1B",
-    border: "1px solid #2A3F38",
+    backgroundColor: "#171614",
+    border: "1px solid #2C2A27",
     borderRadius: "6px",
-    color: "#F0F7F4",
+    color: "#F0EEEB",
     fontSize: "12px",
   };
 
@@ -141,13 +141,13 @@ const CourseOverview = memo(function CourseOverview({
           <ComposedChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
             <XAxis
               dataKey="distance"
-              tick={{ fill: "#5A7A6E", fontSize: 10 }}
+              tick={{ fill: "#6B6762", fontSize: 10 }}
               tickFormatter={(v: number) => `${v}`}
-              axisLine={{ stroke: "#2A3F38" }}
+              axisLine={{ stroke: "#2C2A27" }}
               tickLine={false}
             />
             <YAxis
-              tick={{ fill: "#5A7A6E", fontSize: 10 }}
+              tick={{ fill: "#6B6762", fontSize: 10 }}
               tickFormatter={(v: number) => formatTemp(v)}
               axisLine={false}
               tickLine={false}
@@ -164,7 +164,7 @@ const CourseOverview = memo(function CourseOverview({
               }}
               labelFormatter={(v: number) => `${v} km`}
             />
-            <ReferenceLine y={0} stroke="#2A3F38" strokeDasharray="3 3" />
+            <ReferenceLine y={0} stroke="#2C2A27" strokeDasharray="3 3" />
             {hasTempBands && (
               <Area
                 type="monotone"
@@ -206,13 +206,13 @@ const CourseOverview = memo(function CourseOverview({
           <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
             <XAxis
               dataKey="distance"
-              tick={{ fill: "#5A7A6E", fontSize: 10 }}
+              tick={{ fill: "#6B6762", fontSize: 10 }}
               tickFormatter={(v: number) => `${v}`}
-              axisLine={{ stroke: "#2A3F38" }}
+              axisLine={{ stroke: "#2C2A27" }}
               tickLine={false}
             />
             <YAxis
-              tick={{ fill: "#5A7A6E", fontSize: 10 }}
+              tick={{ fill: "#6B6762", fontSize: 10 }}
               tickFormatter={(v: number) => formatPrecip(v)}
               axisLine={false}
               tickLine={false}
@@ -239,13 +239,13 @@ const CourseOverview = memo(function CourseOverview({
           <ComposedChart data={data} margin={{ top: 12, right: 5, bottom: 5, left: 0 }}>
             <XAxis
               dataKey="distance"
-              tick={{ fill: "#5A7A6E", fontSize: 10 }}
+              tick={{ fill: "#6B6762", fontSize: 10 }}
               tickFormatter={(v: number) => `${v} km`}
-              axisLine={{ stroke: "#2A3F38" }}
+              axisLine={{ stroke: "#2C2A27" }}
               tickLine={false}
             />
             <YAxis
-              tick={{ fill: "#5A7A6E", fontSize: 10 }}
+              tick={{ fill: "#6B6762", fontSize: 10 }}
               tickFormatter={(v: number) => formatWind(v)}
               axisLine={false}
               tickLine={false}
@@ -288,7 +288,7 @@ const CourseOverview = memo(function CourseOverview({
                   x={x}
                   y={y - 8}
                   textAnchor="middle"
-                  fill="#8BA89E"
+                  fill="#9E9A93"
                   fontSize={9}
                 >
                   {data[index]?.windDirection}
