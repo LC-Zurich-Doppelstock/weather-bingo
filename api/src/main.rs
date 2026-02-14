@@ -119,7 +119,11 @@ async fn main() {
             }
         }
         Err(e) => {
-            tracing::error!("Failed to load GPX files from {}: {}", data_dir.display(), e);
+            tracing::error!(
+                "Failed to load GPX files from {}: {}",
+                data_dir.display(),
+                e
+            );
         }
     }
 

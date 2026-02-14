@@ -1,35 +1,128 @@
+use chrono::{DateTime, Utc};
 use rust_decimal::prelude::FromPrimitive;
+use rust_decimal::Decimal;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::models::{Checkpoint, Forecast, Race, RaceDetail};
+use super::models::{Checkpoint, Forecast, Race, RaceDetail, YrCachedResponse};
 use crate::services::gpx::GpxRace;
 
 /// Parameters for inserting a new forecast record.
 pub struct InsertForecastParams {
     pub checkpoint_id: Uuid,
-    pub forecast_time: chrono::DateTime<chrono::Utc>,
-    pub fetched_at: chrono::DateTime<chrono::Utc>,
+    pub forecast_time: DateTime<Utc>,
+    pub fetched_at: DateTime<Utc>,
     pub source: String,
-    pub temperature_c: rust_decimal::Decimal,
-    pub temperature_percentile_10_c: Option<rust_decimal::Decimal>,
-    pub temperature_percentile_90_c: Option<rust_decimal::Decimal>,
-    pub wind_speed_ms: rust_decimal::Decimal,
-    pub wind_speed_percentile_10_ms: Option<rust_decimal::Decimal>,
-    pub wind_speed_percentile_90_ms: Option<rust_decimal::Decimal>,
-    pub wind_direction_deg: rust_decimal::Decimal,
-    pub wind_gust_ms: Option<rust_decimal::Decimal>,
-    pub precipitation_mm: rust_decimal::Decimal,
-    pub precipitation_min_mm: Option<rust_decimal::Decimal>,
-    pub precipitation_max_mm: Option<rust_decimal::Decimal>,
-    pub humidity_pct: rust_decimal::Decimal,
-    pub dew_point_c: rust_decimal::Decimal,
-    pub cloud_cover_pct: rust_decimal::Decimal,
-    pub uv_index: Option<rust_decimal::Decimal>,
+    pub temperature_c: Decimal,
+    pub temperature_percentile_10_c: Option<Decimal>,
+    pub temperature_percentile_90_c: Option<Decimal>,
+    pub wind_speed_ms: Decimal,
+    pub wind_speed_percentile_10_ms: Option<Decimal>,
+    pub wind_speed_percentile_90_ms: Option<Decimal>,
+    pub wind_direction_deg: Decimal,
+    pub wind_gust_ms: Option<Decimal>,
+    pub precipitation_mm: Decimal,
+    pub precipitation_min_mm: Option<Decimal>,
+    pub precipitation_max_mm: Option<Decimal>,
+    pub humidity_pct: Decimal,
+    pub dew_point_c: Decimal,
+    pub cloud_cover_pct: Decimal,
+    pub uv_index: Option<Decimal>,
     pub symbol_code: String,
-    pub feels_like_c: rust_decimal::Decimal,
+    pub feels_like_c: Decimal,
     pub precipitation_type: String,
-    pub raw_response: serde_json::Value,
+}
+
+// ---------------------------------------------------------------------------
+// yr_responses CRUD
+// ---------------------------------------------------------------------------
+
+/// Get a cached yr.no response for a location, only if it hasn't expired.
+pub async fn get_yr_cached_response(
+    pool: &PgPool,
+    latitude: Decimal,
+    longitude: Decimal,
+    elevation_m: Decimal,
+) -> Result<Option<YrCachedResponse>, sqlx::Error> {
+    sqlx::query_as::<_, YrCachedResponse>(
+        "SELECT id, latitude, longitude, elevation_m, fetched_at, expires_at,
+                last_modified, raw_response, created_at
+         FROM yr_responses
+         WHERE latitude = $1 AND longitude = $2 AND elevation_m = $3
+           AND expires_at > NOW()",
+    )
+    .bind(latitude)
+    .bind(longitude)
+    .bind(elevation_m)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Get a cached yr.no response for a location regardless of expiry (for If-Modified-Since).
+pub async fn get_yr_cached_response_any(
+    pool: &PgPool,
+    latitude: Decimal,
+    longitude: Decimal,
+    elevation_m: Decimal,
+) -> Result<Option<YrCachedResponse>, sqlx::Error> {
+    sqlx::query_as::<_, YrCachedResponse>(
+        "SELECT id, latitude, longitude, elevation_m, fetched_at, expires_at,
+                last_modified, raw_response, created_at
+         FROM yr_responses
+         WHERE latitude = $1 AND longitude = $2 AND elevation_m = $3",
+    )
+    .bind(latitude)
+    .bind(longitude)
+    .bind(elevation_m)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Upsert (insert or update) a yr.no cached response for a location.
+#[allow(clippy::too_many_arguments)]
+pub async fn upsert_yr_cached_response(
+    pool: &PgPool,
+    latitude: Decimal,
+    longitude: Decimal,
+    elevation_m: Decimal,
+    fetched_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    last_modified: Option<&str>,
+    raw_response: &serde_json::Value,
+) -> Result<YrCachedResponse, sqlx::Error> {
+    sqlx::query_as::<_, YrCachedResponse>(
+        "INSERT INTO yr_responses (id, latitude, longitude, elevation_m, fetched_at, expires_at, last_modified, raw_response)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (latitude, longitude, elevation_m) DO UPDATE SET
+             fetched_at = EXCLUDED.fetched_at,
+             expires_at = EXCLUDED.expires_at,
+             last_modified = EXCLUDED.last_modified,
+             raw_response = EXCLUDED.raw_response
+         RETURNING id, latitude, longitude, elevation_m, fetched_at, expires_at, last_modified, raw_response, created_at",
+    )
+    .bind(latitude)
+    .bind(longitude)
+    .bind(elevation_m)
+    .bind(fetched_at)
+    .bind(expires_at)
+    .bind(last_modified)
+    .bind(raw_response)
+    .fetch_one(pool)
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Race queries
+// ---------------------------------------------------------------------------
+
+/// Get a race summary (no GPX blob) — lightweight existence check + metadata.
+pub async fn get_race_summary(pool: &PgPool, id: Uuid) -> Result<Option<Race>, sqlx::Error> {
+    sqlx::query_as::<_, Race>(
+        "SELECT id, name, year, start_time, distance_km FROM races WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
 }
 
 /// List all races (summary only, no GPX).
@@ -66,10 +159,14 @@ pub async fn get_checkpoints(pool: &PgPool, race_id: Uuid) -> Result<Vec<Checkpo
 }
 
 /// Get the latest forecast for a checkpoint closest to a given forecast time.
+///
+/// Uses a BETWEEN range (±3 hours) so the composite index on
+/// (checkpoint_id, forecast_time, fetched_at DESC) is used for the scan,
+/// then sorts by closeness within that window.
 pub async fn get_latest_forecast(
     pool: &PgPool,
     checkpoint_id: Uuid,
-    forecast_time: chrono::DateTime<chrono::Utc>,
+    forecast_time: DateTime<Utc>,
 ) -> Result<Option<Forecast>, sqlx::Error> {
     sqlx::query_as::<_, Forecast>(
         "SELECT id, checkpoint_id, forecast_time, fetched_at, source,
@@ -81,6 +178,7 @@ pub async fn get_latest_forecast(
                 feels_like_c, precipitation_type, created_at
          FROM forecasts
          WHERE checkpoint_id = $1
+           AND forecast_time BETWEEN $2 - INTERVAL '3 hours' AND $2 + INTERVAL '3 hours'
          ORDER BY ABS(EXTRACT(EPOCH FROM (forecast_time - $2))), fetched_at DESC
          LIMIT 1",
     )
@@ -95,7 +193,7 @@ pub async fn get_latest_forecast(
 pub async fn get_forecast_history(
     pool: &PgPool,
     checkpoint_id: Uuid,
-    forecast_time: chrono::DateTime<chrono::Utc>,
+    forecast_time: DateTime<Utc>,
 ) -> Result<Vec<Forecast>, sqlx::Error> {
     sqlx::query_as::<_, Forecast>(
         "SELECT id, checkpoint_id, forecast_time, fetched_at, source,
@@ -110,6 +208,7 @@ pub async fn get_forecast_history(
            AND forecast_time = (
                SELECT forecast_time FROM forecasts
                WHERE checkpoint_id = $1
+                 AND forecast_time BETWEEN $2 - INTERVAL '3 hours' AND $2 + INTERVAL '3 hours'
                ORDER BY ABS(EXTRACT(EPOCH FROM (forecast_time - $2)))
                LIMIT 1
            )
@@ -121,7 +220,8 @@ pub async fn get_forecast_history(
     .await
 }
 
-/// Insert a new forecast record (append-only).
+/// Insert a new forecast record (append-only). No longer stores raw_response
+/// (that lives in yr_responses now).
 pub async fn insert_forecast(
     pool: &PgPool,
     params: InsertForecastParams,
@@ -134,12 +234,12 @@ pub async fn insert_forecast(
             wind_direction_deg, wind_gust_ms,
             precipitation_mm, precipitation_min_mm, precipitation_max_mm,
             humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-            feels_like_c, precipitation_type, raw_response, created_at
+            feels_like_c, precipitation_type, created_at
         ) VALUES (
             $1, $2, $3, $4, $5,
             $6, $7, $8, $9, $10, $11, $12, $13,
             $14, $15, $16, $17, $18, $19, $20, $21,
-            $22, $23, $24, NOW()
+            $22, $23, NOW()
         )
         RETURNING id, checkpoint_id, forecast_time, fetched_at, source,
                   temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
@@ -172,7 +272,6 @@ pub async fn insert_forecast(
     .bind(&params.symbol_code)
     .bind(params.feels_like_c)
     .bind(&params.precipitation_type)
-    .bind(params.raw_response)
     .fetch_one(pool)
     .await
 }

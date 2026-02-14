@@ -1,8 +1,23 @@
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
+
+/// Cached yr.no full timeseries response, keyed by (lat, lon, elevation).
+/// Uses yr.no's Expires/Last-Modified headers for cache validity.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct YrCachedResponse {
+    pub id: Uuid,
+    pub latitude: Decimal,
+    pub longitude: Decimal,
+    pub elevation_m: Decimal,
+    pub fetched_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub last_modified: Option<String>,
+    pub raw_response: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
 
 /// Race summary (without GPX data), used for list endpoint.
 #[derive(Debug, Clone, Serialize, FromRow)]

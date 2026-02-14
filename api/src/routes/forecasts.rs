@@ -15,7 +15,10 @@ use uuid::Uuid;
 
 use crate::db::{models, queries};
 use crate::errors::{AppError, ErrorResponse};
-use crate::services::forecast::{calculate_pass_time, get_checkpoint, resolve_forecast};
+use crate::services::forecast::{
+    calculate_pass_time, get_checkpoint, resolve_forecast, resolve_race_forecasts,
+    CheckpointWithTime,
+};
 use crate::services::yr::YrClient;
 
 /// Shared application state for forecast endpoints.
@@ -354,61 +357,75 @@ pub async fn get_race_forecast(
     Path(race_id): Path<Uuid>,
     Query(params): Query<RaceForecastQuery>,
 ) -> Result<Json<RaceForecastResponse>, AppError> {
-    let race = queries::get_race(&state.pool, race_id)
+    // Use lightweight query — no GPX blob
+    let race = queries::get_race_summary(&state.pool, race_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Race {} not found", race_id)))?;
 
     let race_distance_km = race.distance_km.to_f64().unwrap_or(0.0);
     let checkpoints = queries::get_checkpoints(&state.pool, race_id).await?;
 
-    let mut checkpoint_forecasts = Vec::with_capacity(checkpoints.len());
+    // Build checkpoint + expected time pairs
+    let checkpoints_with_times: Vec<CheckpointWithTime> = checkpoints
+        .into_iter()
+        .map(|cp| {
+            let cp_distance = cp.distance_km.to_f64().unwrap_or(0.0);
+            let expected_time = calculate_pass_time(
+                race.start_time,
+                cp_distance,
+                race_distance_km,
+                params.target_duration_hours,
+            );
+            CheckpointWithTime {
+                checkpoint: cp,
+                forecast_time: expected_time,
+            }
+        })
+        .collect();
 
-    for cp in &checkpoints {
-        let cp_distance = cp.distance_km.to_f64().unwrap_or(0.0);
-        let expected_time = calculate_pass_time(
-            race.start_time,
-            cp_distance,
-            race_distance_km,
-            params.target_duration_hours,
-        );
+    // Resolve all forecasts (grouped by location, parallel yr.no fetches)
+    let resolved = resolve_race_forecasts(
+        &state.pool,
+        &state.yr_client,
+        &checkpoints_with_times,
+        state.forecast_staleness_secs,
+    )
+    .await?;
 
-        let (forecast, _is_stale) = resolve_forecast(
-            &state.pool,
-            &state.yr_client,
-            cp,
-            expected_time,
-            state.forecast_staleness_secs,
-        )
-        .await?;
-
-        checkpoint_forecasts.push(RaceForecastCheckpoint {
-            checkpoint_id: cp.id,
-            name: cp.name.clone(),
-            distance_km: cp_distance,
-            expected_time: expected_time.to_rfc3339(),
-            weather: RaceWeatherSimple {
-                temperature_c: forecast.temperature_c.to_f64().unwrap_or(0.0),
-                temperature_percentile_10_c: forecast
-                    .temperature_percentile_10_c
-                    .and_then(|v| v.to_f64()),
-                temperature_percentile_90_c: forecast
-                    .temperature_percentile_90_c
-                    .and_then(|v| v.to_f64()),
-                feels_like_c: forecast.feels_like_c.to_f64().unwrap_or(0.0),
-                wind_speed_ms: forecast.wind_speed_ms.to_f64().unwrap_or(0.0),
-                wind_speed_percentile_10_ms: forecast
-                    .wind_speed_percentile_10_ms
-                    .and_then(|v| v.to_f64()),
-                wind_speed_percentile_90_ms: forecast
-                    .wind_speed_percentile_90_ms
-                    .and_then(|v| v.to_f64()),
-                wind_direction_deg: forecast.wind_direction_deg.to_f64().unwrap_or(0.0),
-                precipitation_mm: forecast.precipitation_mm.to_f64().unwrap_or(0.0),
-                precipitation_type: forecast.precipitation_type.clone(),
-                symbol_code: forecast.symbol_code.clone(),
-            },
-        });
-    }
+    let checkpoint_forecasts: Vec<RaceForecastCheckpoint> = checkpoints_with_times
+        .iter()
+        .zip(resolved.iter())
+        .map(|(cpwt, res)| {
+            let f = &res.forecast;
+            RaceForecastCheckpoint {
+                checkpoint_id: cpwt.checkpoint.id,
+                name: cpwt.checkpoint.name.clone(),
+                distance_km: cpwt.checkpoint.distance_km.to_f64().unwrap_or(0.0),
+                expected_time: cpwt.forecast_time.to_rfc3339(),
+                weather: RaceWeatherSimple {
+                    temperature_c: f.temperature_c.to_f64().unwrap_or(0.0),
+                    temperature_percentile_10_c: f
+                        .temperature_percentile_10_c
+                        .and_then(|v| v.to_f64()),
+                    temperature_percentile_90_c: f
+                        .temperature_percentile_90_c
+                        .and_then(|v| v.to_f64()),
+                    feels_like_c: f.feels_like_c.to_f64().unwrap_or(0.0),
+                    wind_speed_ms: f.wind_speed_ms.to_f64().unwrap_or(0.0),
+                    wind_speed_percentile_10_ms: f
+                        .wind_speed_percentile_10_ms
+                        .and_then(|v| v.to_f64()),
+                    wind_speed_percentile_90_ms: f
+                        .wind_speed_percentile_90_ms
+                        .and_then(|v| v.to_f64()),
+                    wind_direction_deg: f.wind_direction_deg.to_f64().unwrap_or(0.0),
+                    precipitation_mm: f.precipitation_mm.to_f64().unwrap_or(0.0),
+                    precipitation_type: f.precipitation_type.clone(),
+                    symbol_code: f.symbol_code.clone(),
+                },
+            }
+        })
+        .collect();
 
     Ok(Json(RaceForecastResponse {
         race_id: race.id,
