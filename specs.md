@@ -86,7 +86,7 @@ Table: checkpoints
 Table: forecasts
 ├── id              UUID        PK
 ├── checkpoint_id   UUID        FK → checkpoints.id
-├── forecast_time   TIMESTAMPTZ The datetime the forecast is FOR
+├── forecast_time   TIMESTAMPTZ yr.no native timeseries timestamp (whole hours or 6-hour intervals)
 ├── fetched_at      TIMESTAMPTZ When this forecast was retrieved from the source
 ├── source          VARCHAR     e.g. "yr.no"
 │
@@ -113,16 +113,16 @@ Table: forecasts
 ├── precipitation_type          VARCHAR     "snow", "rain", "sleet", "none" (inferred from symbol_code + temp)
 │
 ├── yr_model_run_at         TIMESTAMPTZ When the yr.no weather model was run (nullable)
-├── created_at              TIMESTAMPTZ
-└── raw_response            JSONB       Full raw API response for future use
+└── created_at              TIMESTAMPTZ
 ```
 
-> **Note:** Each forecast fetch from yr.no creates a new row. The `fetched_at` column distinguishes the latest forecast from historical ones for the same `checkpoint_id` + `forecast_time`.
+> **Note:** Forecast data is append-only. When fresh data is fetched from yr.no, ALL timeseries entries (~90-240 entries spanning ~10 days) are bulk-inserted for each checkpoint's location. A partial unique index prevents duplicate rows for the same `(checkpoint_id, forecast_time, yr_model_run_at)` combination. The `fetched_at` column distinguishes forecast batches.
 
 ### 3.4 Indexes & Constraints
 
 - `UNIQUE (name, year)` on `races` — enables idempotent upsert during GPX seeding
 - `UNIQUE (race_id, sort_order)` on `checkpoints` — enables idempotent upsert during GPX seeding
+- `UNIQUE (checkpoint_id, forecast_time, yr_model_run_at) WHERE yr_model_run_at IS NOT NULL` on `forecasts` — deduplication partial unique index, prevents inserting the same yr.no model run data twice
 - `forecasts(checkpoint_id, forecast_time, fetched_at DESC)` — fast lookup of latest forecast per checkpoint/time
 - `forecasts(checkpoint_id, fetched_at)` — historical forecast queries
 - `checkpoints(race_id, sort_order)` — ordered checkpoint retrieval
@@ -157,26 +157,40 @@ Table: forecasts
 
 ### 4.2 Forecast Resolution Logic
 
-When a forecast is requested:
+The API uses a **store-all-then-query** pattern. When fresh data arrives from yr.no, all timeseries entries are bulk-inserted into the database. At query time, the nearest stored yr.no time slot is matched to the pacing-derived pass-through time.
+
+#### Data Ingestion (ensure_yr_timeseries)
 
 ```
-1. Calculate the expected pass-through time for the checkpoint:
+1. Check freshness: is the most recent fetched_at for any checkpoint in
+   this race's location older than the staleness threshold?
+
+2. If stale or missing:
+   → Fetch from yr.no Locationforecast 2.0
+   → Parse ALL timeseries entries from the response (~90-240 entries)
+   → Compute calculated fields (feels_like_c, precipitation_type)
+   → Bulk-insert all entries for each checkpoint at that location
+     (ON CONFLICT DO NOTHING on the dedup index)
+   → Cache the raw JSON response in memory (keyed by location)
+```
+
+#### Query Resolution (resolve_forecast / resolve_race_forecasts)
+
+```
+1. Ensure timeseries data is fresh (trigger ingestion if needed)
+
+2. Calculate the expected pass-through time for the checkpoint:
    pass_time = race.start_time + (checkpoint.distance_km / race.distance_km) * target_duration
 
-2. Look up the latest forecast in DB for (checkpoint_id, pass_time):
+3. Find the nearest forecast in DB within a ±3 hour tolerance window:
    SELECT * FROM forecasts
    WHERE checkpoint_id = :id
-     AND forecast_time = closest(:pass_time)
-   ORDER BY fetched_at DESC
+     AND forecast_time BETWEEN :pass_time - INTERVAL '3 hours'
+                           AND :pass_time + INTERVAL '3 hours'
+   ORDER BY ABS(EXTRACT(EPOCH FROM (forecast_time - :pass_time))), fetched_at DESC
    LIMIT 1
 
-3. If no forecast exists OR the latest fetch is older than the source's update interval:
-   → Fetch from yr.no Locationforecast 2.0
-   → Store the full response in DB
-   → Return to client
-
-4. Otherwise:
-   → Return cached forecast from DB
+4. Return the matched forecast (or null if none within tolerance)
 ```
 
 ### 4.3 Forecast Freshness

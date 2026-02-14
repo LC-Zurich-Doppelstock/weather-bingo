@@ -39,6 +39,10 @@ pub enum YrTimeseriesResult {
 /// Extracted from a cached timeseries, not fetched directly.
 #[derive(Debug, Clone)]
 pub struct YrParsedForecast {
+    /// The yr.no native timeseries timestamp for this entry.
+    /// This is the time slot from yr.no (e.g. "2026-03-01T07:00:00Z"),
+    /// NOT the pacing-derived pass-through time.
+    pub forecast_time: DateTime<Utc>,
     pub temperature_c: Decimal,
     pub temperature_percentile_10_c: Option<Decimal>,
     pub temperature_percentile_90_c: Option<Decimal>,
@@ -237,6 +241,7 @@ impl YrClient {
 ///
 /// Delegates to `extract_forecasts_at_times` for a single time to avoid
 /// duplicating the find-closest + parse logic.
+#[allow(dead_code)]
 pub fn extract_forecast_at_time(
     raw_json: &serde_json::Value,
     forecast_time: DateTime<Utc>,
@@ -249,6 +254,7 @@ pub fn extract_forecast_at_time(
 ///
 /// Much more efficient than calling `extract_forecast_at_time` N times because
 /// we deserialize the JSON only once.
+#[allow(dead_code)]
 pub fn extract_forecasts_at_times(
     raw_json: &serde_json::Value,
     forecast_times: &[DateTime<Utc>],
@@ -300,8 +306,59 @@ pub fn extract_forecasts_at_times(
     Ok(results)
 }
 
+/// Extract ALL forecasts from a cached yr.no timeseries JSON.
+///
+/// Returns every timeseries entry with its native yr.no timestamp.
+/// This is used to bulk-insert all time slots into the forecasts table,
+/// rather than extracting just one forecast at a pacing-derived time.
+pub fn extract_all_forecasts(
+    raw_json: &serde_json::Value,
+) -> Result<Vec<YrParsedForecast>, AppError> {
+    let yr_response: YrResponse = serde_json::from_value(raw_json.clone()).map_err(|e| {
+        AppError::ExternalServiceError(format!("yr.no response structure error: {}", e))
+    })?;
+
+    // Parse model run timestamp from meta.updated_at
+    let yr_model_run_at = yr_response
+        .properties
+        .meta
+        .as_ref()
+        .and_then(|m| m.updated_at.as_deref())
+        .and_then(|s| {
+            DateTime::parse_from_rfc3339(s)
+                .map(|dt| dt.with_timezone(&Utc))
+                .ok()
+        });
+
+    let timeseries = &yr_response.properties.timeseries;
+    if timeseries.is_empty() {
+        return Err(AppError::ExternalServiceError(
+            "yr.no returned empty timeseries".to_string(),
+        ));
+    }
+
+    let mut results = Vec::with_capacity(timeseries.len());
+
+    for entry in timeseries {
+        let mut parsed = parse_timeseries_entry(entry)?;
+        parsed.yr_model_run_at = yr_model_run_at;
+        results.push(parsed);
+    }
+
+    Ok(results)
+}
+
 /// Parse a single yr.no timeseries entry into a `YrParsedForecast`.
 fn parse_timeseries_entry(entry: &YrTimeseries) -> Result<YrParsedForecast, AppError> {
+    let entry_time = DateTime::parse_from_rfc3339(&entry.time)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|e| {
+            AppError::ExternalServiceError(format!(
+                "yr.no timeseries entry has invalid time '{}': {}",
+                entry.time, e
+            ))
+        })?;
+
     let instant = &entry.data.instant.details;
 
     // Get period data (prefer next_1_hours, fall back to next_6_hours)
@@ -320,6 +377,7 @@ fn parse_timeseries_entry(entry: &YrTimeseries) -> Result<YrParsedForecast, AppE
     let precip = period.and_then(|p| p.details.as_ref());
 
     Ok(YrParsedForecast {
+        forecast_time: entry_time,
         temperature_c: f64_to_decimal(instant.air_temperature.unwrap_or(0.0)),
         temperature_percentile_10_c: opt_f64_to_decimal(instant.air_temperature_percentile_10),
         temperature_percentile_90_c: opt_f64_to_decimal(instant.air_temperature_percentile_90),
@@ -338,7 +396,7 @@ fn parse_timeseries_entry(entry: &YrTimeseries) -> Result<YrParsedForecast, AppE
         cloud_cover_pct: f64_to_decimal(instant.cloud_area_fraction.unwrap_or(0.0)),
         uv_index: opt_f64_to_decimal(instant.ultraviolet_index_clear_sky),
         symbol_code,
-        // Set to None here; overwritten by extract_forecasts_at_times after parsing meta.
+        // Set to None here; overwritten by callers after parsing meta.
         yr_model_run_at: None,
     })
 }
@@ -586,5 +644,149 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].temperature_c, Decimal::from_str("-5.0").unwrap());
         assert_eq!(results[1].temperature_c, Decimal::from_str("-2.0").unwrap());
+    }
+
+    #[test]
+    fn test_extract_all_forecasts() {
+        let json = serde_json::json!({
+            "type": "Feature",
+            "properties": {
+                "meta": {
+                    "updated_at": "2026-02-28T14:00:00Z"
+                },
+                "timeseries": [
+                    {
+                        "time": "2026-03-01T07:00:00Z",
+                        "data": {
+                            "instant": {
+                                "details": {
+                                    "air_temperature": -5.0,
+                                    "wind_speed": 3.2,
+                                    "wind_from_direction": 180.0,
+                                    "relative_humidity": 75.0,
+                                    "dew_point_temperature": -8.5,
+                                    "cloud_area_fraction": 50.0
+                                }
+                            },
+                            "next_1_hours": {
+                                "summary": { "symbol_code": "cloudy" },
+                                "details": { "precipitation_amount": 0.0 }
+                            }
+                        }
+                    },
+                    {
+                        "time": "2026-03-01T08:00:00Z",
+                        "data": {
+                            "instant": {
+                                "details": {
+                                    "air_temperature": -3.0,
+                                    "wind_speed": 4.0,
+                                    "wind_from_direction": 200.0,
+                                    "relative_humidity": 70.0,
+                                    "dew_point_temperature": -7.0,
+                                    "cloud_area_fraction": 60.0
+                                }
+                            },
+                            "next_1_hours": {
+                                "summary": { "symbol_code": "lightsnow" },
+                                "details": { "precipitation_amount": 0.5 }
+                            }
+                        }
+                    },
+                    {
+                        "time": "2026-03-01T09:00:00Z",
+                        "data": {
+                            "instant": {
+                                "details": {
+                                    "air_temperature": -1.0,
+                                    "wind_speed": 5.5,
+                                    "wind_from_direction": 210.0,
+                                    "relative_humidity": 68.0,
+                                    "dew_point_temperature": -5.5,
+                                    "cloud_area_fraction": 70.0
+                                }
+                            },
+                            "next_1_hours": {
+                                "summary": { "symbol_code": "snow" },
+                                "details": { "precipitation_amount": 1.2 }
+                            }
+                        }
+                    }
+                ]
+            }
+        });
+
+        let results = extract_all_forecasts(&json).unwrap();
+        assert_eq!(results.len(), 3);
+
+        // Check forecast_time is the yr.no native timestamp
+        let expected_t0 = "2026-03-01T07:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let expected_t1 = "2026-03-01T08:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let expected_t2 = "2026-03-01T09:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert_eq!(results[0].forecast_time, expected_t0);
+        assert_eq!(results[1].forecast_time, expected_t1);
+        assert_eq!(results[2].forecast_time, expected_t2);
+
+        // Check temperatures
+        assert_eq!(results[0].temperature_c, Decimal::from_str("-5.0").unwrap());
+        assert_eq!(results[1].temperature_c, Decimal::from_str("-3.0").unwrap());
+        assert_eq!(results[2].temperature_c, Decimal::from_str("-1.0").unwrap());
+
+        // Check model run is set on all entries
+        let expected_model_run = "2026-02-28T14:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        for result in &results {
+            assert_eq!(result.yr_model_run_at, Some(expected_model_run));
+        }
+    }
+
+    #[test]
+    fn test_extract_all_forecasts_empty() {
+        let json = serde_json::json!({
+            "type": "Feature",
+            "properties": {
+                "timeseries": []
+            }
+        });
+
+        let result = extract_all_forecasts(&json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_forecast_time_field_on_extract_at_time() {
+        // Verify that extract_forecast_at_time returns the yr.no native timestamp,
+        // not the requested time.
+        let json = serde_json::json!({
+            "type": "Feature",
+            "properties": {
+                "timeseries": [
+                    {
+                        "time": "2026-03-01T07:00:00Z",
+                        "data": {
+                            "instant": {
+                                "details": {
+                                    "air_temperature": -5.0,
+                                    "wind_speed": 3.2,
+                                    "wind_from_direction": 180.0,
+                                    "relative_humidity": 75.0,
+                                    "dew_point_temperature": -8.5,
+                                    "cloud_area_fraction": 50.0
+                                }
+                            },
+                            "next_1_hours": {
+                                "summary": { "symbol_code": "cloudy" },
+                                "details": { "precipitation_amount": 0.0 }
+                            }
+                        }
+                    }
+                ]
+            }
+        });
+
+        // Request 07:14 — should snap to 07:00
+        let ft = "2026-03-01T07:14:00Z".parse::<DateTime<Utc>>().unwrap();
+        let result = extract_forecast_at_time(&json, ft).unwrap();
+        let expected_native = "2026-03-01T07:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert_eq!(result.forecast_time, expected_native);
     }
 }

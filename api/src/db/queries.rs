@@ -422,6 +422,10 @@ pub async fn get_forecast_history(
 /// Used for deduplication: re-fetching the same yr.no model run should not create
 /// duplicate rows. If `yr_model_run_at` is None, always returns false (no dedup
 /// possible without model run info).
+///
+/// Note: With the new bulk-insert architecture, deduplication is handled by
+/// the unique index + ON CONFLICT DO NOTHING. Retained for potential future use.
+#[allow(dead_code)]
 pub async fn forecast_exists_for_model_run(
     pool: &PgPool,
     checkpoint_id: Uuid,
@@ -449,6 +453,10 @@ pub async fn forecast_exists_for_model_run(
 
 /// Insert a new forecast record (append-only). No longer stores raw_response
 /// (that lives in yr_responses now).
+///
+/// Note: With the new bulk-insert architecture, `bulk_insert_forecasts` is
+/// preferred. Retained for potential future use.
+#[allow(dead_code)]
 pub async fn insert_forecast(
     pool: &PgPool,
     params: InsertForecastParams,
@@ -502,6 +510,77 @@ pub async fn insert_forecast(
     .bind(params.yr_model_run_at)
     .fetch_one(pool)
     .await
+}
+
+/// Bulk insert forecast records for a checkpoint from parsed yr.no timeseries.
+///
+/// Uses `ON CONFLICT DO NOTHING` on the deduplication index
+/// (checkpoint_id, forecast_time, yr_model_run_at) to skip rows that already
+/// exist for the same model run. Returns the number of rows actually inserted.
+pub async fn bulk_insert_forecasts(
+    pool: &PgPool,
+    params: &[InsertForecastParams],
+) -> Result<u64, sqlx::Error> {
+    if params.is_empty() {
+        return Ok(0);
+    }
+
+    // Build a batch of individual INSERTs wrapped in a single transaction.
+    // This is simpler and more maintainable than building a multi-row VALUES clause.
+    let mut tx = pool.begin().await?;
+    let mut inserted = 0u64;
+
+    for p in params {
+        let result = sqlx::query(
+            "INSERT INTO forecasts (
+                id, checkpoint_id, forecast_time, fetched_at, source,
+                temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
+                wind_speed_ms, wind_speed_percentile_10_ms, wind_speed_percentile_90_ms,
+                wind_direction_deg, wind_gust_ms,
+                precipitation_mm, precipitation_min_mm, precipitation_max_mm,
+                humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
+                feels_like_c, precipitation_type, yr_model_run_at, created_at
+            ) VALUES (
+                $1, $2, $3, $4, $5,
+                $6, $7, $8, $9, $10, $11, $12, $13,
+                $14, $15, $16, $17, $18, $19, $20, $21,
+                $22, $23, $24, NOW()
+            )
+            ON CONFLICT (checkpoint_id, forecast_time, yr_model_run_at)
+                WHERE yr_model_run_at IS NOT NULL
+            DO NOTHING",
+        )
+        .bind(Uuid::new_v4())
+        .bind(p.checkpoint_id)
+        .bind(p.forecast_time)
+        .bind(p.fetched_at)
+        .bind(&p.source)
+        .bind(p.temperature_c)
+        .bind(p.temperature_percentile_10_c)
+        .bind(p.temperature_percentile_90_c)
+        .bind(p.wind_speed_ms)
+        .bind(p.wind_speed_percentile_10_ms)
+        .bind(p.wind_speed_percentile_90_ms)
+        .bind(p.wind_direction_deg)
+        .bind(p.wind_gust_ms)
+        .bind(p.precipitation_mm)
+        .bind(p.precipitation_min_mm)
+        .bind(p.precipitation_max_mm)
+        .bind(p.humidity_pct)
+        .bind(p.dew_point_c)
+        .bind(p.cloud_cover_pct)
+        .bind(p.uv_index)
+        .bind(&p.symbol_code)
+        .bind(p.feels_like_c)
+        .bind(&p.precipitation_type)
+        .bind(p.yr_model_run_at)
+        .execute(&mut *tx)
+        .await?;
+        inserted += result.rows_affected();
+    }
+
+    tx.commit().await?;
+    Ok(inserted)
 }
 
 /// Get a single checkpoint by ID.
