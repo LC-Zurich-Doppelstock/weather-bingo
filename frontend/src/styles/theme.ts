@@ -14,6 +14,7 @@ export const colors = {
   secondary: "#14B8A6",
   accentWarm: "#F5A623",
   accentCool: "#7C8CF5",
+  accentRose: "#D4687A",
   textPrimary: "#F0EEEB",
   textSecondary: "#9E9A93",
   textMuted: "#6B6762",

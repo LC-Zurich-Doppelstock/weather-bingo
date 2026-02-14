@@ -31,8 +31,8 @@ const CheckpointMarker = memo(function CheckpointMarker({
       center={[checkpoint.latitude, checkpoint.longitude]}
       radius={isSelected ? 8 : 6}
       pathOptions={{
-        color: isSelected ? colors.primary : colors.secondary,
-        fillColor: isSelected ? colors.primary : colors.surface,
+        color: isSelected ? colors.accentRose : colors.accentRose,
+        fillColor: isSelected ? colors.accentRose : colors.surface,
         fillOpacity: isSelected ? 1 : 0.8,
         weight: isSelected ? 3 : 2,
       }}

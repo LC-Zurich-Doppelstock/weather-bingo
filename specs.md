@@ -378,22 +378,23 @@ When the full course is selected:
 
 The UI colour palette will be derived from a user-provided reference image. Colours will be extracted and mapped to a modern, sleek design system:
 
-Derived from the reference artwork (tropical botanical pattern on black background):
+Derived from the reference artwork (tropical botanical pattern on black background), with warm charcoal neutrals for structural elements:
 
 | Role              | Hex         | Colour             | Usage                                        |
 | ----------------- | ----------- | ------------------ | -------------------------------------------- |
-| **Background**    | `#0A0F0D`   | Near-black green   | App background, main canvas                  |
-| **Surface**       | `#141E1B`   | Dark jungle        | Sidebar, cards, elevated elements            |
-| **Surface Alt**   | `#1C2B27`   | Deep teal-black    | Hover states, input fields, map overlays     |
+| **Background**    | `#0D0D0C`   | Warm charcoal      | App background, main canvas                  |
+| **Surface**       | `#171614`   | Dark charcoal      | Sidebar, cards, elevated elements            |
+| **Surface Alt**   | `#1F1E1C`   | Medium charcoal    | Hover states, input fields, map overlays     |
 | **Primary**       | `#2DD4A8`   | Emerald mint       | Buttons, active states, links, CTA           |
 | **Primary Hover** | `#34EBB9`   | Bright mint        | Button hover, focus rings                    |
 | **Secondary**     | `#14B8A6`   | Teal               | Secondary actions, chart accents             |
 | **Accent Warm**   | `#F5A623`   | Golden amber       | Highlights, warnings, temperature indicator  |
 | **Accent Cool**   | `#7C8CF5`   | Lavender blue      | Info states, wind indicators, secondary data |
-| **Text Primary**  | `#F0F7F4`   | Off-white green    | Main text, headings                          |
-| **Text Secondary**| `#8BA89E`   | Muted sage         | Labels, captions, secondary text             |
-| **Text Muted**    | `#5A7A6E`   | Faded green        | Placeholders, disabled text                  |
-| **Border**        | `#2A3F38`   | Dark green-grey    | Dividers, card borders, subtle lines         |
+| **Accent Rose**   | `#D4687A`   | Dusty pink         | Title, race course, checkpoint markers, slider |
+| **Text Primary**  | `#F0EEEB`   | Warm off-white     | Main text, headings                          |
+| **Text Secondary**| `#9E9A93`   | Warm grey          | Labels, captions, secondary text             |
+| **Text Muted**    | `#6B6762`   | Muted charcoal     | Placeholders, disabled text                  |
+| **Border**        | `#2C2A27`   | Dark warm grey     | Dividers, card borders, subtle lines         |
 | **Error**         | `#EF4444`   | Red                | Error states, critical alerts                |
 | **Success**       | `#2DD4A8`   | Emerald mint (=primary) | Success feedback                        |
 
@@ -414,10 +415,10 @@ Uncertainty ranges (percentile bands) are rendered as the same colour at **15% o
 
 #### Design Principles
 
-- **Dark-first**: The UI uses a dark theme inspired by the black background of the artwork.
-- **Nature-forward**: Greens and teals dominate, keeping the organic, botanical feel.
+- **Dark-first**: The UI uses a dark theme with warm charcoal neutrals for structural elements.
+- **Colour accents**: Greens and teals for functional/data elements, dusty pink for navigation and course identity.
 - **High contrast**: Bright mint and golden amber ensure readability and clear CTAs against the dark background.
-- **Subtle depth**: Surface layers use progressively lighter shades of dark green to create depth without harsh borders.
+- **Subtle depth**: Surface layers use progressively lighter shades of warm charcoal to create depth without harsh borders.
 - **Warm accents sparingly**: Golden amber is reserved for attention-drawing elements (temperature highlights, warnings) — never overused.
 
 ---

@@ -30,7 +30,7 @@ export default function TargetTimeInput({
         step={step}
         value={value}
         onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="h-2 flex-1 cursor-pointer appearance-none rounded-lg bg-surface-alt accent-primary"
+        className="h-2 flex-1 cursor-pointer appearance-none rounded-lg bg-surface-alt accent-accent-rose"
         aria-label="Target race duration"
       />
       <span className="min-w-[4rem] text-right text-sm font-medium text-text-primary">

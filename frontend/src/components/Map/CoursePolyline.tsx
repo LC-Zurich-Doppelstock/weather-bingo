@@ -78,7 +78,7 @@ const CoursePolyline = memo(function CoursePolyline({ gpxData }: CoursePolylineP
     <Polyline
       positions={positions}
       pathOptions={{
-        color: colors.primary,
+        color: colors.accentRose,
         weight: 3,
         opacity: 0.8,
         lineCap: "round",

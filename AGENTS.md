@@ -66,18 +66,19 @@ weather-bingo/
 
 ## Colour Palette
 
-The UI uses a dark theme derived from a tropical botanical artwork:
+The UI uses a dark theme with warm charcoal neutrals:
 
 | Role | Hex | Usage |
 |------|-----|-------|
-| Background | `#0A0F0D` | App background |
-| Surface | `#141E1B` | Sidebar, cards |
+| Background | `#0D0D0C` | App background |
+| Surface | `#171614` | Sidebar, cards |
 | Primary | `#2DD4A8` | Buttons, active states |
 | Secondary | `#14B8A6` | Secondary actions |
 | Accent Warm | `#F5A623` | Highlights, temperature |
 | Accent Cool | `#7C8CF5` | Wind, info states |
-| Text Primary | `#F0F7F4` | Main text |
-| Text Secondary | `#8BA89E` | Labels, captions |
+| Accent Rose | `#D4687A` | Title, race course, checkpoints, slider |
+| Text Primary | `#F0EEEB` | Main text |
+| Text Secondary | `#9E9A93` | Labels, captions |
 | Error | `#EF4444` | Error states |
 
 ## Key Conventions
