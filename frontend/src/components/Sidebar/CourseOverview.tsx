@@ -207,9 +207,7 @@ const CourseOverview = memo(function CourseOverview({
               labelFormatter={(v: number) => `${v} km`}
             />
             <ReferenceLine y={0} stroke="#2C2A27" strokeDasharray="3 3" />
-            {hoveredDistance != null && (
-              <ReferenceLine x={hoveredDistance} stroke="#D4687A" strokeDasharray="3 3" strokeWidth={1} />
-            )}
+            <ReferenceLine x={hoveredDistance ?? 0} stroke="#D4687A" strokeDasharray="3 3" strokeWidth={1} strokeOpacity={hoveredDistance != null ? 1 : 0} ifOverflow="hidden" />
             {hasTempBands && (
               <Area
                 type="monotone"
@@ -273,9 +271,7 @@ const CourseOverview = memo(function CourseOverview({
               formatter={(value: number) => [formatPrecip(value), ""]}
               labelFormatter={(v: number) => `${v} km`}
             />
-            {hoveredDistance != null && (
-              <ReferenceLine x={hoveredDistance} stroke="#D4687A" strokeDasharray="3 3" strokeWidth={1} />
-            )}
+            <ReferenceLine x={hoveredDistance ?? 0} stroke="#D4687A" strokeDasharray="3 3" strokeWidth={1} strokeOpacity={hoveredDistance != null ? 1 : 0} ifOverflow="hidden" />
             <Bar
               dataKey="precipitation"
               fill={chartColors.precipitation}
@@ -321,9 +317,7 @@ const CourseOverview = memo(function CourseOverview({
               }}
               labelFormatter={(v: number) => `${v} km`}
             />
-            {hoveredDistance != null && (
-              <ReferenceLine x={hoveredDistance} stroke="#D4687A" strokeDasharray="3 3" strokeWidth={1} />
-            )}
+            <ReferenceLine x={hoveredDistance ?? 0} stroke="#D4687A" strokeDasharray="3 3" strokeWidth={1} strokeOpacity={hoveredDistance != null ? 1 : 0} ifOverflow="hidden" />
             {hasWindBands && (
               <Area
                 type="monotone"
