@@ -56,7 +56,7 @@ function App() {
       />
       <main className="flex min-h-0 flex-1 flex-col lg:flex-row">
         {/* Map area */}
-        <div className="relative min-h-0 flex-1 bg-surface-alt">
+        <div className="relative min-h-0 lg:flex-[3] bg-surface-alt">
           {/* Target time control overlay */}
           <div className="absolute left-4 right-4 top-4 z-[1000] rounded-lg bg-surface/90 p-3 backdrop-blur-sm lg:left-auto lg:right-4 lg:w-80">
             <TargetTimeInput
@@ -78,7 +78,7 @@ function App() {
         </div>
 
         {/* Sidebar */}
-        <aside className="w-full border-l border-border bg-surface lg:w-96 lg:overflow-y-auto" aria-label="Weather forecast sidebar">
+        <aside className="min-h-0 flex-1 overflow-y-auto border-l border-border bg-surface lg:flex-[2]" aria-label="Weather forecast sidebar">
           <Sidebar
             race={race ?? null}
             checkpoints={checkpoints ?? []}

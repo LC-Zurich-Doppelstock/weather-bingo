@@ -132,7 +132,7 @@ export default function MiniTimeline({
       <div className="mb-2 text-xs font-medium uppercase tracking-wider text-text-muted">
         Timeline
       </div>
-      <ResponsiveContainer width="100%" height={120}>
+      <ResponsiveContainer width="100%" height={160}>
         <ComposedChart
           data={data}
           margin={{ top: 5, right: 5, bottom: 5, left: 0 }}

@@ -61,7 +61,7 @@ export default function Sidebar({
   if (selectedCheckpoint && passTime) {
     return (
       <div className="h-full overflow-y-auto" role="region" aria-label={`Weather details for ${selectedCheckpoint.name}`}>
-        <div className="border-b border-border p-3">
+        <div className="sticky top-0 z-10 border-b border-border bg-surface p-3">
           <button
             onClick={onClearSelection}
             className="text-sm text-text-secondary hover:text-primary transition-colors"

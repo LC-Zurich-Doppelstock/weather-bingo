@@ -137,7 +137,7 @@ const CourseOverview = memo(function CourseOverview({
 
       {/* Temperature chart */}
       <SparklineSection title="Temperature" unit="°C">
-        <ResponsiveContainer width="100%" height={100}>
+        <ResponsiveContainer width="100%" height={140}>
           <ComposedChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
             <XAxis
               dataKey="distance"
@@ -202,7 +202,7 @@ const CourseOverview = memo(function CourseOverview({
 
       {/* Precipitation chart */}
       <SparklineSection title="Precipitation" unit="mm">
-        <ResponsiveContainer width="100%" height={80}>
+        <ResponsiveContainer width="100%" height={110}>
           <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
             <XAxis
               dataKey="distance"
@@ -235,7 +235,7 @@ const CourseOverview = memo(function CourseOverview({
 
       {/* Wind chart */}
       <SparklineSection title="Wind Speed" unit="m/s">
-         <ResponsiveContainer width="100%" height={90}>
+         <ResponsiveContainer width="100%" height={130}>
           <ComposedChart data={data} margin={{ top: 12, right: 5, bottom: 5, left: 0 }}>
             <XAxis
               dataKey="distance"
