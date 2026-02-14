@@ -116,7 +116,7 @@ Table: forecasts
 └── created_at              TIMESTAMPTZ
 ```
 
-> **Note:** Forecast data is append-only. When fresh data is fetched from yr.no, ALL timeseries entries (~90-240 entries spanning ~10 days) are bulk-inserted for each checkpoint's location. A partial unique index prevents duplicate rows for the same `(checkpoint_id, forecast_time, yr_model_run_at)` combination. The `fetched_at` column distinguishes forecast batches.
+> **Note:** Forecast data is append-only. When fresh data is fetched from yr.no, only the forecast entry closest to the requested pass-through time is extracted and stored (one row per checkpoint per request). A partial unique index prevents duplicate rows for the same `(checkpoint_id, forecast_time, yr_model_run_at)` combination. The `fetched_at` column distinguishes forecast versions from different model runs.
 
 ### 3.4 Indexes & Constraints
 
@@ -157,41 +157,52 @@ Table: forecasts
 
 ### 4.2 Forecast Resolution Logic
 
-The API uses a **store-all-then-query** pattern. When fresh data arrives from yr.no, all timeseries entries are bulk-inserted into the database. At query time, the nearest stored yr.no time slot is matched to the pacing-derived pass-through time.
+The API uses a **targeted extraction** pattern. The full yr.no timeseries response (~10 days of data) is cached in `yr_responses`, but only the forecast entry closest to each requested pass-through time is extracted and stored in the `forecasts` table.
 
-#### Data Ingestion (ensure_yr_timeseries)
+#### Forecast Horizon & Resolution-Aware Tolerance
+
+yr.no Locationforecast provides two resolution tiers:
+
+| Tier | Time range | Step size | `next_1_hours` | `next_6_hours` | Max tolerance |
+|------|-----------|-----------|----------------|----------------|---------------|
+| **Hourly** | 0--60h | 1 hour | Present | Present | 1 hour |
+| **SixHourly** | 60h--~10 days | 6 hours | Absent | Present | 3 hours |
+
+When extracting a forecast for a requested time, the API finds the closest yr.no timeseries entry and checks whether it falls within the resolution-appropriate tolerance. If the closest entry is too far away (e.g., race date is beyond yr.no's ~10-day horizon), the forecast is returned as `null` with `forecast_available: false` instead of serving misleading data from a distant time slot.
+
+Resolution is detected per-entry: if `next_1_hours` is present, the entry is Hourly; otherwise SixHourly.
+
+#### Data Flow
 
 ```
-1. Check freshness: is the most recent fetched_at for any checkpoint in
-   this race's location older than the staleness threshold?
+1. UI requests forecast for a specific checkpoint pass-through time
 
-2. If stale or missing:
-   → Fetch from yr.no Locationforecast 2.0
-   → Parse ALL timeseries entries from the response (~90-240 entries)
+2. Check DB for a cached forecast near that time (±3 hour window)
+   AND check if the yr.no response cache is still valid (not expired)
+   → If both: return cached forecast from DB (fast path)
+
+3. If yr.no cache expired or no forecast stored:
+   → Fetch fresh timeseries from yr.no (conditional: If-Modified-Since)
+   → Cache the full JSON response in yr_responses
+   → Extract ONLY the single forecast entry closest to the requested time
    → Compute calculated fields (feels_like_c, precipitation_type)
-   → Bulk-insert all entries for each checkpoint at that location
-     (ON CONFLICT DO NOTHING on the dedup index)
-   → Cache the raw JSON response in memory (keyed by location)
+   → Insert that one row into forecasts
+   → Return to client
+
+4. If yr.no returns 304 Not Modified:
+   → Bump the cache expiry, return existing forecast from DB
+
+5. If yr.no is unreachable:
+   → Return stale cached forecast with X-Forecast-Stale: true header
 ```
 
-#### Query Resolution (resolve_forecast / resolve_race_forecasts)
+#### Race Endpoint (batch)
 
-```
-1. Ensure timeseries data is fresh (trigger ingestion if needed)
-
-2. Calculate the expected pass-through time for the checkpoint:
-   pass_time = race.start_time + (checkpoint.distance_km / race.distance_km) * target_duration
-
-3. Find the nearest forecast in DB within a ±3 hour tolerance window:
-   SELECT * FROM forecasts
-   WHERE checkpoint_id = :id
-     AND forecast_time BETWEEN :pass_time - INTERVAL '3 hours'
-                           AND :pass_time + INTERVAL '3 hours'
-   ORDER BY ABS(EXTRACT(EPOCH FROM (forecast_time - :pass_time))), fetched_at DESC
-   LIMIT 1
-
-4. Return the matched forecast (or null if none within tolerance)
-```
+For the race endpoint, all checkpoints are resolved in parallel:
+- One batch query checks for existing forecasts across all checkpoints
+- One batch query checks yr.no cache validity for all unique locations
+- Only stale/missing locations trigger yr.no fetches (grouped by location)
+- Each fetch extracts only the forecast entries for that location's checkpoints
 
 ### 4.3 Forecast Freshness
 
@@ -251,6 +262,7 @@ yr.no provides historical Nordic forecast model data in NetCDF format via their 
 | ---------------------------- | ----------- | ------------------------------------------------ |
 | yr.no unavailable            | 200 (stale) | Return cached data with `X-Forecast-Stale: true` header |
 | yr.no unavailable, no cache  | 502         | Return error with message                        |
+| Beyond forecast horizon      | 200         | Return `forecast_available: false`, `weather: null` |
 | Invalid race/checkpoint ID   | 404         | Standard not-found response                      |
 | Invalid query parameters     | 400         | Validation error details                         |
 
@@ -755,12 +767,13 @@ The application is deployable to [Railway](https://railway.com/) as a PoC/stagin
 
 ### 9.4 GET `/api/v1/forecasts/checkpoint/:checkpoint_id?datetime=ISO8601`
 
-**Response:**
+**Response (forecast available):**
 ```json
 {
   "checkpoint_id": "uuid",
-  "checkpoint_name": "Smågan",
+  "checkpoint_name": "Sm\u00e5gan",
   "forecast_time": "2026-03-01T10:24:00+01:00",
+  "forecast_available": true,
   "fetched_at": "2026-02-28T14:30:00Z",
   "yr_model_run_at": "2026-02-28T12:00:00Z",
   "source": "yr.no",
@@ -787,6 +800,23 @@ The application is deployable to [Railway](https://railway.com/) as a PoC/stagin
   }
 }
 ```
+
+**Response (beyond forecast horizon):**
+```json
+{
+  "checkpoint_id": "uuid",
+  "checkpoint_name": "Sm\u00e5gan",
+  "forecast_time": "2026-03-01T10:24:00+01:00",
+  "forecast_available": false,
+  "fetched_at": null,
+  "yr_model_run_at": null,
+  "source": null,
+  "stale": false,
+  "weather": null
+}
+```
+
+> **Note:** `forecast_available` is `false` when the requested datetime is beyond yr.no's ~10-day forecast horizon. In this case, `weather`, `fetched_at`, `source`, and `yr_model_run_at` are all null. The `forecast_time` still reflects the originally requested time.
 
 ### 9.5 GET `/api/v1/forecasts/checkpoint/:checkpoint_id/history?datetime=ISO8601`
 
@@ -831,6 +861,7 @@ The application is deployable to [Railway](https://railway.com/) as a PoC/stagin
       "name": "Berga (Start)",
       "distance_km": 0,
       "expected_time": "2026-03-01T08:00:00+01:00",
+      "forecast_available": true,
       "weather": {
         "temperature_c": -5.0,
         "temperature_percentile_10_c": -7.0,
@@ -850,15 +881,18 @@ The application is deployable to [Railway](https://railway.com/) as a PoC/stagin
       "name": "Sm\u00e5gan",
       "distance_km": 11,
       "expected_time": "2026-03-01T09:58:00+01:00",
+      "forecast_available": true,
       "weather": { "..." : "..." }
     }
   ]
 }
 ```
 
+> **Note:** Each checkpoint has a `forecast_available` boolean. When `false` (race date beyond yr.no's ~10-day horizon), `weather` is `null` for that checkpoint. The race-level `yr_model_run_at` only considers checkpoints where forecasts are available.
+
 > **Note:** The race-level endpoint includes uncertainty ranges (p10/p90 for temperature and wind) to support the CourseOverview shaded band charts. Percentile fields are nullable — they may be absent for long-range forecasts.
 
-> **Note:** The race-level `yr_model_run_at` is the **oldest** (minimum) model run time across all checkpoints, providing a conservative indicator of forecast freshness. The UI displays this as "Model run: {time}" in the course overview. For single-checkpoint views, `yr_model_run_at` comes directly from the individual forecast row.
+> **Note:** The race-level `yr_model_run_at` is the **oldest** (minimum) model run time across all checkpoints that have available forecasts, providing a conservative indicator of forecast freshness. The UI displays this as "Model run: {time}" in the course overview. For single-checkpoint views, `yr_model_run_at` comes directly from the individual forecast row. When all checkpoints are beyond the forecast horizon, `yr_model_run_at` is `null`.
 
 ---
 

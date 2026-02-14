@@ -122,19 +122,24 @@ pub struct ForecastResponse {
     pub checkpoint_id: Uuid,
     /// Checkpoint name
     pub checkpoint_name: String,
-    /// The datetime the forecast is for (ISO 8601)
+    /// The datetime the forecast is for (ISO 8601).
+    /// When `forecast_available` is false, this is the originally requested time.
     pub forecast_time: String,
-    /// When this forecast was last fetched from the source (ISO 8601)
-    pub fetched_at: String,
+    /// Whether forecast data is available for the requested time.
+    /// `false` when the race date is beyond yr.no's ~10-day forecast horizon.
+    pub forecast_available: bool,
+    /// When this forecast was last fetched from the source (ISO 8601).
+    /// Null when `forecast_available` is false.
+    pub fetched_at: Option<String>,
     /// When yr.no's weather model generated this forecast (ISO 8601).
-    /// Null for older rows that predate this tracking.
+    /// Null for older rows that predate this tracking, or when forecast is unavailable.
     pub yr_model_run_at: Option<String>,
-    /// Forecast data source (e.g. "yr.no")
-    pub source: String,
+    /// Forecast data source (e.g. "yr.no"). Null when forecast is unavailable.
+    pub source: Option<String>,
     /// Whether this forecast is stale (yr.no was unreachable, serving cached data)
     pub stale: bool,
-    /// Full weather data
-    pub weather: ForecastWeather,
+    /// Full weather data. Null when `forecast_available` is false.
+    pub weather: Option<ForecastWeather>,
 }
 
 /// A single historical forecast entry showing weather at a previous fetch time.
@@ -200,8 +205,12 @@ pub struct RaceForecastCheckpoint {
     pub distance_km: f64,
     /// Expected pass-through time based on even pacing (ISO 8601)
     pub expected_time: String,
-    /// Simplified weather at expected pass-through time
-    pub weather: RaceWeatherSimple,
+    /// Whether forecast data is available for this checkpoint's expected time.
+    /// `false` when the race date is beyond yr.no's ~10-day forecast horizon.
+    pub forecast_available: bool,
+    /// Simplified weather at expected pass-through time.
+    /// Null when `forecast_available` is false.
+    pub weather: Option<RaceWeatherSimple>,
 }
 
 /// Full race forecast response with weather at all checkpoints (Section 9.6).
@@ -259,7 +268,7 @@ pub async fn get_checkpoint_forecast(
 
     let checkpoint = get_checkpoint(&state.pool, checkpoint_id).await?;
 
-    let (forecast, is_stale) = resolve_forecast(
+    let (maybe_forecast, is_stale) = resolve_forecast(
         &state.pool,
         &state.yr_client,
         &checkpoint,
@@ -268,15 +277,29 @@ pub async fn get_checkpoint_forecast(
     )
     .await?;
 
-    let response = ForecastResponse {
-        checkpoint_id: checkpoint.id,
-        checkpoint_name: checkpoint.name,
-        forecast_time: forecast.forecast_time.to_rfc3339(),
-        fetched_at: forecast.fetched_at.to_rfc3339(),
-        yr_model_run_at: forecast.yr_model_run_at.map(|dt| dt.to_rfc3339()),
-        source: forecast.source.clone(),
-        stale: is_stale,
-        weather: ForecastWeather::from(&forecast),
+    let response = match maybe_forecast {
+        Some(forecast) => ForecastResponse {
+            checkpoint_id: checkpoint.id,
+            checkpoint_name: checkpoint.name.clone(),
+            forecast_time: forecast.forecast_time.to_rfc3339(),
+            forecast_available: true,
+            fetched_at: Some(forecast.fetched_at.to_rfc3339()),
+            yr_model_run_at: forecast.yr_model_run_at.map(|dt| dt.to_rfc3339()),
+            source: Some(forecast.source.clone()),
+            stale: is_stale,
+            weather: Some(ForecastWeather::from(&forecast)),
+        },
+        None => ForecastResponse {
+            checkpoint_id: checkpoint.id,
+            checkpoint_name: checkpoint.name.clone(),
+            forecast_time: forecast_time.to_rfc3339(),
+            forecast_available: false,
+            fetched_at: None,
+            yr_model_run_at: None,
+            source: None,
+            stale: false,
+            weather: None,
+        },
     };
 
     let mut headers = HeaderMap::new();
@@ -415,42 +438,45 @@ pub async fn get_race_forecast(
         .iter()
         .zip(resolved.iter())
         .map(|(cpwt, res)| {
-            let f = &res.forecast;
+            let weather = res.forecast.as_ref().map(|f| RaceWeatherSimple {
+                temperature_c: f.temperature_c.to_f64().unwrap_or(0.0),
+                temperature_percentile_10_c: f
+                    .temperature_percentile_10_c
+                    .and_then(|v| v.to_f64()),
+                temperature_percentile_90_c: f
+                    .temperature_percentile_90_c
+                    .and_then(|v| v.to_f64()),
+                feels_like_c: f.feels_like_c.to_f64().unwrap_or(0.0),
+                wind_speed_ms: f.wind_speed_ms.to_f64().unwrap_or(0.0),
+                wind_speed_percentile_10_ms: f
+                    .wind_speed_percentile_10_ms
+                    .and_then(|v| v.to_f64()),
+                wind_speed_percentile_90_ms: f
+                    .wind_speed_percentile_90_ms
+                    .and_then(|v| v.to_f64()),
+                wind_direction_deg: f.wind_direction_deg.to_f64().unwrap_or(0.0),
+                precipitation_mm: f.precipitation_mm.to_f64().unwrap_or(0.0),
+                precipitation_type: f.precipitation_type.clone(),
+                symbol_code: f.symbol_code.clone(),
+            });
+
             RaceForecastCheckpoint {
                 checkpoint_id: cpwt.checkpoint.id,
                 name: cpwt.checkpoint.name.clone(),
                 distance_km: cpwt.checkpoint.distance_km.to_f64().unwrap_or(0.0),
                 expected_time: cpwt.forecast_time.to_rfc3339(),
-                weather: RaceWeatherSimple {
-                    temperature_c: f.temperature_c.to_f64().unwrap_or(0.0),
-                    temperature_percentile_10_c: f
-                        .temperature_percentile_10_c
-                        .and_then(|v| v.to_f64()),
-                    temperature_percentile_90_c: f
-                        .temperature_percentile_90_c
-                        .and_then(|v| v.to_f64()),
-                    feels_like_c: f.feels_like_c.to_f64().unwrap_or(0.0),
-                    wind_speed_ms: f.wind_speed_ms.to_f64().unwrap_or(0.0),
-                    wind_speed_percentile_10_ms: f
-                        .wind_speed_percentile_10_ms
-                        .and_then(|v| v.to_f64()),
-                    wind_speed_percentile_90_ms: f
-                        .wind_speed_percentile_90_ms
-                        .and_then(|v| v.to_f64()),
-                    wind_direction_deg: f.wind_direction_deg.to_f64().unwrap_or(0.0),
-                    precipitation_mm: f.precipitation_mm.to_f64().unwrap_or(0.0),
-                    precipitation_type: f.precipitation_type.clone(),
-                    symbol_code: f.symbol_code.clone(),
-                },
+                forecast_available: weather.is_some(),
+                weather,
             }
         })
         .collect();
 
-    // Find the oldest model run time across all checkpoints
+    // Find the oldest model run time across all checkpoints that have forecasts
     // (oldest = most conservative indicator of forecast freshness)
     let yr_model_run_at = resolved
         .iter()
-        .filter_map(|r| r.forecast.yr_model_run_at)
+        .filter_map(|r| r.forecast.as_ref())
+        .filter_map(|f| f.yr_model_run_at)
         .min()
         .map(|dt| dt.to_rfc3339());
 

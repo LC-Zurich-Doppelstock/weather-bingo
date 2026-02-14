@@ -453,10 +453,6 @@ pub async fn forecast_exists_for_model_run(
 
 /// Insert a new forecast record (append-only). No longer stores raw_response
 /// (that lives in yr_responses now).
-///
-/// Note: With the new bulk-insert architecture, `bulk_insert_forecasts` is
-/// preferred. Retained for potential future use.
-#[allow(dead_code)]
 pub async fn insert_forecast(
     pool: &PgPool,
     params: InsertForecastParams,
@@ -517,6 +513,10 @@ pub async fn insert_forecast(
 /// Uses `ON CONFLICT DO NOTHING` on the deduplication index
 /// (checkpoint_id, forecast_time, yr_model_run_at) to skip rows that already
 /// exist for the same model run. Returns the number of rows actually inserted.
+///
+/// Note: With the targeted extraction architecture, `insert_forecast` is
+/// preferred (one row per request). Retained for potential future use.
+#[allow(dead_code)]
 pub async fn bulk_insert_forecasts(
     pool: &PgPool,
     params: &[InsertForecastParams],

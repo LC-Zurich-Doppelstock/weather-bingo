@@ -57,33 +57,49 @@ const CourseOverview = memo(function CourseOverview({
   hoveredCheckpointId,
   onCheckpointHover,
 }: CourseOverviewProps) {
-  // Build chart data from race forecast (empty array if no data)
+  // Whether any checkpoint in the race forecast is missing weather data
+  const hasAnyUnavailable = useMemo(() => {
+    if (!raceForecast) return false;
+    return raceForecast.checkpoints.some((cp) => cp.weather === null);
+  }, [raceForecast]);
+
+  const allUnavailable = useMemo(() => {
+    if (!raceForecast || raceForecast.checkpoints.length === 0) return false;
+    return raceForecast.checkpoints.every((cp) => cp.weather === null);
+  }, [raceForecast]);
+
+  // Build chart data from race forecast — only checkpoints with weather data
   const data: ChartDataPoint[] = useMemo(() => {
     if (!raceForecast || raceForecast.checkpoints.length === 0) return [];
-    return raceForecast.checkpoints.map((cp) => ({
-      checkpointId: cp.checkpoint_id,
-      name: cp.name.split(" ")[0] ?? cp.name,
-      distance: cp.distance_km,
-      temperature: cp.weather.temperature_c,
-      tempP10: cp.weather.temperature_percentile_10_c ?? null,
-      tempP90: cp.weather.temperature_percentile_90_c ?? null,
-      tempRange:
-        cp.weather.temperature_percentile_10_c != null &&
-        cp.weather.temperature_percentile_90_c != null
-          ? [cp.weather.temperature_percentile_10_c, cp.weather.temperature_percentile_90_c] as [number, number]
-          : null,
-      feelsLike: cp.weather.feels_like_c,
-      wind: cp.weather.wind_speed_ms,
-      windP10: cp.weather.wind_speed_percentile_10_ms ?? null,
-      windP90: cp.weather.wind_speed_percentile_90_ms ?? null,
-      windRange:
-        cp.weather.wind_speed_percentile_10_ms != null &&
-        cp.weather.wind_speed_percentile_90_ms != null
-          ? [cp.weather.wind_speed_percentile_10_ms, cp.weather.wind_speed_percentile_90_ms] as [number, number]
-          : null,
-      windDirection: windDirectionLabel(cp.weather.wind_direction_deg),
-      precipitation: cp.weather.precipitation_mm,
-    }));
+    return raceForecast.checkpoints
+      .filter((cp) => cp.weather !== null)
+      .map((cp) => {
+        const w = cp.weather!;
+        return {
+          checkpointId: cp.checkpoint_id,
+          name: cp.name.split(" ")[0] ?? cp.name,
+          distance: cp.distance_km,
+          temperature: w.temperature_c,
+          tempP10: w.temperature_percentile_10_c ?? null,
+          tempP90: w.temperature_percentile_90_c ?? null,
+          tempRange:
+            w.temperature_percentile_10_c != null &&
+            w.temperature_percentile_90_c != null
+              ? [w.temperature_percentile_10_c, w.temperature_percentile_90_c] as [number, number]
+              : null,
+          feelsLike: w.feels_like_c,
+          wind: w.wind_speed_ms,
+          windP10: w.wind_speed_percentile_10_ms ?? null,
+          windP90: w.wind_speed_percentile_90_ms ?? null,
+          windRange:
+            w.wind_speed_percentile_10_ms != null &&
+            w.wind_speed_percentile_90_ms != null
+              ? [w.wind_speed_percentile_10_ms, w.wind_speed_percentile_90_ms] as [number, number]
+              : null,
+          windDirection: windDirectionLabel(w.wind_direction_deg),
+          precipitation: w.precipitation_mm,
+        };
+      });
   }, [raceForecast]);
 
   // Compute the active chart index from the hovered checkpoint ID
@@ -138,11 +154,20 @@ const CourseOverview = memo(function CourseOverview({
         <h2 className="text-lg font-bold text-text-primary">
           Weather Along the Course
         </h2>
-        <p className="mt-4 text-text-muted">
-          {checkpoints.length === 0
-            ? "No checkpoints available"
-            : "Loading forecast data..."}
-        </p>
+        {allUnavailable ? (
+          <div className="mt-4 rounded-lg bg-surface-alt p-4">
+            <p className="text-sm text-text-muted">
+              Forecast not yet available — the race date is beyond the ~10-day
+              forecast horizon. Check back closer to race day.
+            </p>
+          </div>
+        ) : (
+          <p className="mt-4 text-text-muted">
+            {checkpoints.length === 0
+              ? "No checkpoints available"
+              : "Loading forecast data..."}
+          </p>
+        )}
       </div>
     );
   }
@@ -171,6 +196,12 @@ const CourseOverview = memo(function CourseOverview({
         <p className="text-xs text-text-muted">
           Model run: {formatTimeWithZone(raceForecast!.yr_model_run_at)}
         </p>
+      )}
+
+      {hasAnyUnavailable && !allUnavailable && (
+        <div className="rounded-md bg-accent-warm/10 px-3 py-2 text-xs text-accent-warm">
+          Some checkpoints are beyond the forecast horizon — showing available data only.
+        </div>
       )}
 
       {/* Temperature chart */}

@@ -57,6 +57,20 @@ export default function CheckpointDetail({
     );
   }
 
+  if (!forecast.forecast_available || forecast.weather === null) {
+    return (
+      <div className="space-y-4 p-4">
+        <CheckpointHeader checkpoint={checkpoint} passTime={passTime} />
+        <div className="rounded-lg bg-surface-alt p-4">
+          <p className="text-sm text-text-muted">
+            Forecast not yet available — the race date is beyond the ~10-day
+            forecast horizon. Check back closer to race day.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const w = forecast.weather;
 
   return (
@@ -148,7 +162,7 @@ export default function CheckpointDetail({
 
       {/* Metadata */}
       <div className="border-t border-border pt-3 text-xs text-text-muted">
-        <div>Source: {forecast.source}</div>
+        {forecast.source && <div>Source: {forecast.source}</div>}
         {forecast.yr_model_run_at && (
           <div>
             Model run: {formatTimeWithZone(forecast.yr_model_run_at)}

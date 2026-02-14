@@ -21,6 +21,7 @@ const mockForecast: ForecastResponse = {
   checkpoint_id: "cp-1",
   checkpoint_name: "Salen",
   forecast_time: "2026-03-01T07:00:00Z",
+  forecast_available: true,
   fetched_at: "2026-02-28T12:00:00Z",
   yr_model_run_at: "2026-02-28T06:00:00Z",
   source: "yr.no",
@@ -96,6 +97,29 @@ describe("CheckpointDetail", () => {
     );
     expect(
       screen.getByText("No forecast data available for this time.")
+    ).toBeInTheDocument();
+  });
+
+  it("renders forecast-unavailable message when weather is null", () => {
+    const unavailableForecast: ForecastResponse = {
+      ...mockForecast,
+      forecast_available: false,
+      weather: null,
+      fetched_at: null,
+      source: null,
+    };
+    render(
+      <CheckpointDetail
+        checkpoint={mockCheckpoint}
+        passTime="2026-03-01T07:00:00Z"
+        forecast={unavailableForecast}
+        isLoading={false}
+      />,
+      { wrapper: createWrapper() }
+    );
+    expect(screen.getByText("Salen")).toBeInTheDocument();
+    expect(
+      screen.getByText(/forecast not yet available/i)
     ).toBeInTheDocument();
   });
 

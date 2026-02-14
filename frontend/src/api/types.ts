@@ -51,11 +51,12 @@ export interface ForecastResponse {
   checkpoint_id: string;
   checkpoint_name: string;
   forecast_time: string; // ISO 8601
-  fetched_at: string; // ISO 8601
+  forecast_available: boolean;
+  fetched_at: string | null; // ISO 8601, null when forecast unavailable
   yr_model_run_at: string | null; // ISO 8601
-  source: string;
+  source: string | null; // null when forecast unavailable
   stale: boolean;
-  weather: ForecastWeather;
+  weather: ForecastWeather | null; // null when beyond yr.no forecast horizon
 }
 
 export interface ForecastHistoryEntry {
@@ -77,6 +78,7 @@ export interface RaceForecastCheckpoint {
   name: string;
   distance_km: number;
   expected_time: string; // ISO 8601
+  forecast_available: boolean;
   weather: {
     temperature_c: number;
     temperature_percentile_10_c: number | null;
@@ -89,7 +91,7 @@ export interface RaceForecastCheckpoint {
     precipitation_mm: number;
     precipitation_type: string;
     symbol_code: string;
-  };
+  } | null; // null when beyond yr.no forecast horizon
 }
 
 export interface RaceForecastResponse {
