@@ -1,14 +1,15 @@
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use serde::Serialize;
 use sqlx::FromRow;
 use uuid::Uuid;
 
-/// Cached yr.no full timeseries response, keyed by (lat, lon, elevation).
+/// Cached yr.no full timeseries response, keyed by checkpoint.
 /// Uses yr.no's Expires/Last-Modified headers for cache validity.
-#[derive(Debug, Clone, Serialize, FromRow)]
+#[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)] // All fields populated by FromRow; some accessed only via route serialization
 pub struct YrCachedResponse {
     pub id: Uuid,
+    pub checkpoint_id: Uuid,
     pub latitude: Decimal,
     pub longitude: Decimal,
     pub elevation_m: Decimal,
@@ -20,7 +21,7 @@ pub struct YrCachedResponse {
 }
 
 /// Race summary (without GPX data), used for list and summary endpoints.
-#[derive(Debug, Clone, Serialize, FromRow)]
+#[derive(Debug, Clone, FromRow)]
 pub struct Race {
     pub id: Uuid,
     pub name: String,
@@ -30,7 +31,8 @@ pub struct Race {
 }
 
 /// A checkpoint along a race course.
-#[derive(Debug, Clone, Serialize, FromRow)]
+#[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)] // All fields populated by FromRow; some accessed only via route serialization
 pub struct Checkpoint {
     pub id: Uuid,
     pub race_id: Uuid,
@@ -43,7 +45,8 @@ pub struct Checkpoint {
 }
 
 /// A weather forecast record for a checkpoint at a specific time.
-#[derive(Debug, Clone, Serialize, FromRow)]
+#[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)] // All fields populated by FromRow; some accessed only via route serialization
 pub struct Forecast {
     pub id: Uuid,
     pub checkpoint_id: Uuid,

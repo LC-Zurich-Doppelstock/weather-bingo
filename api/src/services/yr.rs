@@ -375,24 +375,52 @@ fn parse_timeseries_entry(entry: &YrTimeseries) -> Result<YrParsedForecast, AppE
 
     let precip = period.and_then(|p| p.details.as_ref());
 
+    // Helper to log warnings for mandatory fields that are unexpectedly missing.
+    // yr.no should always provide these, so missing values indicate a data issue.
+    let unwrap_or_warn = |field: Option<f64>, name: &str| -> f64 {
+        match field {
+            Some(v) => v,
+            None => {
+                tracing::warn!(
+                    "yr.no entry at {} is missing mandatory field '{}', defaulting to 0.0",
+                    entry.time,
+                    name,
+                );
+                0.0
+            }
+        }
+    };
+
     Ok(YrParsedForecast {
         forecast_time: entry_time,
-        temperature_c: f64_to_decimal(instant.air_temperature.unwrap_or(0.0)),
+        temperature_c: f64_to_decimal(unwrap_or_warn(instant.air_temperature, "air_temperature")),
         temperature_percentile_10_c: opt_f64_to_decimal(instant.air_temperature_percentile_10),
         temperature_percentile_90_c: opt_f64_to_decimal(instant.air_temperature_percentile_90),
-        wind_speed_ms: f64_to_decimal(instant.wind_speed.unwrap_or(0.0)),
+        wind_speed_ms: f64_to_decimal(unwrap_or_warn(instant.wind_speed, "wind_speed")),
         wind_speed_percentile_10_ms: opt_f64_to_decimal(instant.wind_speed_percentile_10),
         wind_speed_percentile_90_ms: opt_f64_to_decimal(instant.wind_speed_percentile_90),
-        wind_direction_deg: f64_to_decimal(instant.wind_from_direction.unwrap_or(0.0)),
+        wind_direction_deg: f64_to_decimal(unwrap_or_warn(
+            instant.wind_from_direction,
+            "wind_from_direction",
+        )),
         wind_gust_ms: opt_f64_to_decimal(instant.wind_speed_of_gust),
         precipitation_mm: f64_to_decimal(
             precip.and_then(|p| p.precipitation_amount).unwrap_or(0.0),
         ),
         precipitation_min_mm: opt_f64_to_decimal(precip.and_then(|p| p.precipitation_amount_min)),
         precipitation_max_mm: opt_f64_to_decimal(precip.and_then(|p| p.precipitation_amount_max)),
-        humidity_pct: f64_to_decimal(instant.relative_humidity.unwrap_or(0.0)),
-        dew_point_c: f64_to_decimal(instant.dew_point_temperature.unwrap_or(0.0)),
-        cloud_cover_pct: f64_to_decimal(instant.cloud_area_fraction.unwrap_or(0.0)),
+        humidity_pct: f64_to_decimal(unwrap_or_warn(
+            instant.relative_humidity,
+            "relative_humidity",
+        )),
+        dew_point_c: f64_to_decimal(unwrap_or_warn(
+            instant.dew_point_temperature,
+            "dew_point_temperature",
+        )),
+        cloud_cover_pct: f64_to_decimal(unwrap_or_warn(
+            instant.cloud_area_fraction,
+            "cloud_area_fraction",
+        )),
         uv_index: opt_f64_to_decimal(instant.ultraviolet_index_clear_sky),
         symbol_code,
         // Set to None here; overwritten by callers after parsing meta.

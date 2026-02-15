@@ -469,9 +469,8 @@ Uncertainty ranges (percentile bands) are rendered as the same colour at **15% o
 | Layer           | Tool            | Coverage                                           |
 | --------------- | --------------- | -------------------------------------------------- |
 | Unit tests      | `#[cfg(test)]`  | Forecast resolution logic, time calculations, data parsing |
-| Integration     | `axum::test`    | Endpoint responses, DB queries, error handling     |
-| External mocks  | `wiremock`      | yr.no API responses (success, failure, rate limit) |
-| DB tests        | `sqlx` test     | Migrations, queries against test database          |
+
+> **Note:** We use unit tests with mock data only — no integration tests, wiremock, or test database. Expand unit tests in `#[cfg(test)]` modules to cover new logic.
 
 ### 6.2 Frontend (TypeScript)
 
@@ -556,6 +555,7 @@ On startup (after running database migrations), the API:
 ### 7.3 Current Data
 
 - **`data/vasaloppet-2026.gpx`** — Vasaloppet 2026 (90 km, Berga/Sälen to Mora, 9 checkpoints). Coordinates sourced from the [official track profile on Wikipedia](https://en.wikipedia.org/wiki/Vasaloppet#Track_profile).
+- **`data/vasaloppet-2026-test.gpx`** — Test variant of Vasaloppet 2026 (same course and checkpoints). Used for local development and testing without affecting the primary race data.
 
 ---
 
@@ -598,7 +598,8 @@ services:
 
   frontend:
     build:
-      context: ./frontend
+      context: .
+      dockerfile: frontend/Dockerfile
       target: dev
     ports: ["3000:3000"]
     environment:
@@ -681,7 +682,8 @@ weather-bingo/
 │   └── public/
 │
 ├── data/                       # Race GPX files (seed data)
-│   └── vasaloppet-2026.gpx
+│   ├── vasaloppet-2026.gpx
+│   └── vasaloppet-2026-test.gpx
 ├── docker-compose.yml
 ├── AGENTS.md
 ├── README.md

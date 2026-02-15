@@ -26,7 +26,6 @@ use crate::services::yr::YrClient;
 pub struct AppState {
     pub pool: sqlx::PgPool,
     pub yr_client: YrClient,
-    pub forecast_staleness_secs: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -217,7 +216,7 @@ pub struct RaceForecastCheckpoint {
     pub name: String,
     /// Distance from race start in km
     pub distance_km: f64,
-    /// Expected pass-through time based on even pacing (ISO 8601)
+    /// Expected pass-through time based on elevation-adjusted pacing (ISO 8601)
     pub expected_time: String,
     /// Whether forecast data is available for this checkpoint's expected time.
     /// `false` when the race date is beyond yr.no's ~10-day forecast horizon.
@@ -282,14 +281,8 @@ pub async fn get_checkpoint_forecast(
 
     let checkpoint = get_checkpoint(&state.pool, checkpoint_id).await?;
 
-    let (maybe_forecast, is_stale) = resolve_forecast(
-        &state.pool,
-        &state.yr_client,
-        &checkpoint,
-        forecast_time,
-        state.forecast_staleness_secs,
-    )
-    .await?;
+    let (maybe_forecast, is_stale) =
+        resolve_forecast(&state.pool, &state.yr_client, &checkpoint, forecast_time).await?;
 
     let response = match maybe_forecast {
         Some(forecast) => ForecastResponse {
@@ -408,6 +401,18 @@ pub async fn get_race_forecast(
     Path(race_id): Path<Uuid>,
     Query(params): Query<RaceForecastQuery>,
 ) -> Result<(HeaderMap, Json<RaceForecastResponse>), AppError> {
+    // Validate target_duration_hours
+    if params.target_duration_hours <= 0.0 || params.target_duration_hours > 72.0 {
+        return Err(AppError::BadRequest(
+            "target_duration_hours must be between 0 (exclusive) and 72".to_string(),
+        ));
+    }
+    if !params.target_duration_hours.is_finite() {
+        return Err(AppError::BadRequest(
+            "target_duration_hours must be a finite number".to_string(),
+        ));
+    }
+
     // Use lightweight query — no GPX blob
     let race = queries::get_race_summary(&state.pool, race_id)
         .await?
@@ -442,14 +447,9 @@ pub async fn get_race_forecast(
         })
         .collect();
 
-    // Resolve all forecasts (grouped by location, parallel yr.no fetches)
-    let resolved = resolve_race_forecasts(
-        &state.pool,
-        &state.yr_client,
-        &checkpoints_with_times,
-        state.forecast_staleness_secs,
-    )
-    .await?;
+    // Resolve all forecasts (parallel yr.no fetches per checkpoint)
+    let resolved =
+        resolve_race_forecasts(&state.pool, &state.yr_client, &checkpoints_with_times).await?;
 
     let checkpoint_forecasts: Vec<RaceForecastCheckpoint> = checkpoints_with_times
         .iter()

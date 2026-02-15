@@ -4,7 +4,6 @@ pub struct AppConfig {
     pub database_url: String,
     pub yr_user_agent: String,
     pub port: u16,
-    pub forecast_staleness_secs: u64,
     /// Directory containing GPX files for race seeding.
     pub data_dir: String,
 }
@@ -20,10 +19,6 @@ impl AppConfig {
                 .unwrap_or_else(|_| "8080".to_string())
                 .parse()
                 .expect("PORT must be a valid u16"),
-            forecast_staleness_secs: std::env::var("FORECAST_STALENESS_SECS")
-                .unwrap_or_else(|_| "60".to_string())
-                .parse()
-                .expect("FORECAST_STALENESS_SECS must be a valid u64"),
             data_dir: std::env::var("DATA_DIR").unwrap_or_else(|_| "./data".to_string()),
         }
     }
@@ -35,17 +30,21 @@ mod tests {
 
     #[test]
     fn test_default_values() {
-        // Clear env vars that might interfere
-        std::env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
-        std::env::remove_var("YR_USER_AGENT");
-        std::env::remove_var("PORT");
-        std::env::remove_var("FORECAST_STALENESS_SECS");
-        std::env::remove_var("DATA_DIR");
+        // NOTE: set_var/remove_var in tests is unsafe in multi-threaded contexts
+        // (Rust may run tests in parallel). However, this test exercises the
+        // default-value logic which only needs env vars. We accept the risk
+        // since cargo test runs this module's tests sequentially within one
+        // test binary. If Rust editions mark these as `unsafe`, wrap accordingly.
+        unsafe {
+            std::env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
+            std::env::remove_var("YR_USER_AGENT");
+            std::env::remove_var("PORT");
+            std::env::remove_var("DATA_DIR");
+        }
 
         let config = AppConfig::from_env();
 
         assert_eq!(config.port, 8080);
-        assert_eq!(config.forecast_staleness_secs, 60);
         assert!(config.yr_user_agent.contains("WeatherBingo"));
         assert_eq!(config.data_dir, "./data");
     }

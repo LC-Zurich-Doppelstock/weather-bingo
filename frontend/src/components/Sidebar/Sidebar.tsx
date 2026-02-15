@@ -85,12 +85,24 @@ export default function Sidebar({
               &larr; Course Overview
             </button>
           </div>
-          <CheckpointDetail
-            checkpoint={selectedCheckpoint}
-            passTime=""
-            forecast={null}
-            isLoading={true}
-          />
+          <div className="space-y-4 p-4" aria-busy="true">
+            <div className="border-b border-border pb-3">
+              <h2 className="text-lg font-bold text-text-primary">
+                {selectedCheckpoint.name}
+                <span className="ml-2 text-sm font-normal text-text-secondary">
+                  ({selectedCheckpoint.distance_km.toFixed(1)} km)
+                </span>
+              </h2>
+            </div>
+            <div className="space-y-3" role="status" aria-label="Loading forecast data">
+              {[...Array(5)].map((_, i) => (
+                <div
+                  key={i}
+                  className="h-12 animate-pulse rounded-lg bg-surface-alt"
+                />
+              ))}
+            </div>
+          </div>
         </div>
       );
     }
@@ -168,6 +180,30 @@ export default function Sidebar({
         </div>
       );
     }
+
+    // passTime is null, not loading, no error — checkpoint may be beyond
+    // the forecast horizon or race forecast has no entry for this checkpoint
+    return (
+      <div className="h-full overflow-y-auto" role="region" aria-label={`Weather details for ${selectedCheckpoint.name}`}>
+        <div className="sticky top-0 z-10 border-b border-border bg-surface p-3">
+          <button
+            onClick={onClearSelection}
+            className="text-sm text-text-secondary hover:text-primary transition-colors"
+            aria-label="Back to course overview"
+          >
+            &larr; Course Overview
+          </button>
+        </div>
+        <div className="p-4">
+          <h2 className="text-lg font-bold text-text-primary">
+            {selectedCheckpoint.name}
+          </h2>
+          <p className="mt-4 text-sm text-text-muted">
+            Forecast timing unavailable for this checkpoint.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   // Race forecast error on course overview

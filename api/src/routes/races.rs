@@ -105,8 +105,14 @@ pub async fn get_race_course(
     let gpx = queries::get_race_course_gpx(&pool, id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Race {} not found", id)))?;
-    let points = crate::services::gpx::extract_track_points(&gpx)
-        .map_err(|e| AppError::InternalError(format!("Failed to parse course GPX: {}", e)))?;
+
+    // GPX parsing is CPU-bound — run on the blocking thread pool
+    let points =
+        tokio::task::spawn_blocking(move || crate::services::gpx::extract_track_points(&gpx))
+            .await
+            .map_err(|e| AppError::InternalError(format!("GPX parsing task failed: {}", e)))?
+            .map_err(|e| AppError::InternalError(format!("Failed to parse course GPX: {}", e)))?;
+
     Ok(Json(points))
 }
 

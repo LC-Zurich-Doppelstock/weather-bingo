@@ -5,6 +5,7 @@ import TargetTimeInput from "./components/Controls/TargetTimeInput";
 import RaceMap from "./components/Map/RaceMap";
 import Sidebar from "./components/Sidebar/Sidebar";
 import { useRaces, useCourse, useCheckpoints } from "./hooks/useRace";
+import { useDebouncedValue } from "./hooks/useDebouncedValue";
 
 /** Max skier speed in km/h (sprint pace). */
 const MAX_SPEED_KMH = 30;
@@ -53,6 +54,11 @@ function App() {
   // Clamp target duration when race changes
   const clampedDuration = Math.min(Math.max(effectiveDuration, minDuration), maxDuration);
 
+  // Debounce the clamped duration to avoid hammering the API while the user drags the slider.
+  // The slider still moves instantly (controlled by clampedDuration), but API fetches wait
+  // for 300ms of inactivity.
+  const debouncedDuration = useDebouncedValue(clampedDuration, 300);
+
   const handleClearSelection = useCallback(() => {
     setSelectedCheckpointId(null);
   }, []);
@@ -96,7 +102,7 @@ function App() {
             checkpoints={checkpoints ?? []}
             selectedCheckpointId={selectedCheckpointId}
             hoveredCheckpointId={hoveredCheckpointId}
-            targetDurationHours={clampedDuration}
+            targetDurationHours={debouncedDuration}
             onClearSelection={handleClearSelection}
             onCheckpointHover={setHoveredCheckpointId}
           />

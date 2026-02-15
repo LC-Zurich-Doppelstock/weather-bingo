@@ -235,4 +235,93 @@ describe("Sidebar", () => {
       await screen.findByRole("region", { name: /Weather details for Salen/ })
     ).toBeInTheDocument();
   });
+
+  it("shows retry button when race forecast fails on course overview", async () => {
+    server.use(
+      http.get("/api/v1/forecasts/race/:raceId", () => {
+        return HttpResponse.json(
+          { error: "Internal server error" },
+          { status: 500 }
+        );
+      })
+    );
+
+    render(
+      <Sidebar
+        race={mockRace}
+        checkpoints={mockCheckpoints}
+        selectedCheckpointId={null}
+        hoveredCheckpointId={null}
+        targetDurationHours={8}
+        onClearSelection={vi.fn()}
+        onCheckpointHover={vi.fn()}
+      />,
+      { wrapper: createWrapper() }
+    );
+
+    expect(
+      await screen.findByText("Failed to load forecast data.")
+    ).toBeInTheDocument();
+    expect(screen.getByText("Retry")).toBeInTheDocument();
+  });
+
+  it("shows retry button when race forecast fails with checkpoint selected", async () => {
+    server.use(
+      http.get("/api/v1/forecasts/race/:raceId", () => {
+        return HttpResponse.json(
+          { error: "Internal server error" },
+          { status: 500 }
+        );
+      })
+    );
+
+    render(
+      <Sidebar
+        race={mockRace}
+        checkpoints={mockCheckpoints}
+        selectedCheckpointId="cp-1"
+        hoveredCheckpointId={null}
+        targetDurationHours={8}
+        onClearSelection={vi.fn()}
+        onCheckpointHover={vi.fn()}
+      />,
+      { wrapper: createWrapper() }
+    );
+
+    expect(
+      await screen.findByText("Failed to load forecast data.")
+    ).toBeInTheDocument();
+    expect(screen.getByText("Retry")).toBeInTheDocument();
+    // Back button should still be present
+    expect(screen.getByLabelText("Back to course overview")).toBeInTheDocument();
+  });
+
+  it("shows retry button when individual forecast fails", async () => {
+    server.use(
+      http.get("/api/v1/forecasts/checkpoint/:checkpointId", () => {
+        return HttpResponse.json(
+          { error: "Internal server error" },
+          { status: 500 }
+        );
+      })
+    );
+
+    render(
+      <Sidebar
+        race={mockRace}
+        checkpoints={mockCheckpoints}
+        selectedCheckpointId="cp-1"
+        hoveredCheckpointId={null}
+        targetDurationHours={8}
+        onClearSelection={vi.fn()}
+        onCheckpointHover={vi.fn()}
+      />,
+      { wrapper: createWrapper() }
+    );
+
+    expect(
+      await screen.findByText("Failed to load forecast data.")
+    ).toBeInTheDocument();
+    expect(screen.getByText("Retry")).toBeInTheDocument();
+  });
 });

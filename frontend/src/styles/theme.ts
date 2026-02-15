@@ -23,12 +23,14 @@ export const colors = {
   success: "#2DD4A8",
 } as const;
 
-// Chart colours (ordered for data visualisation)
+// Chart colours (ordered for data visualisation, per specs.md §5.6)
 export const chartColors = {
   temperature: "#2DD4A8",
   feelsLike: "#14B8A6",
   wind: "#7C8CF5",
   precipitation: "#F5A623",
+  humidity: "#34EBB9",
+  cloudCover: "#5A7A6E",
 } as const;
 
 // Uncertainty bands use same colour at 15% opacity

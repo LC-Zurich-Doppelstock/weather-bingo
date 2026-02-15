@@ -73,11 +73,11 @@ weather-bingo/
 
 The API uses an **extract-on-read** architecture for forecast data:
 
-1. The full yr.no JSON response (~10 days of timeseries) is cached in the `yr_responses` table.
+1. The full yr.no JSON response (~10 days of timeseries) is cached in the `yr_responses` table, keyed by `checkpoint_id` (FK to `checkpoints`).
 2. When a forecast is requested, the API ensures the yr.no cache is fresh, then **extracts the relevant forecast entry in-memory** from the cached JSON.
 3. Extracted forecasts are also written to the `forecasts` table for historical tracking (append-only, deduplicated via `ON CONFLICT DO NOTHING`).
 
-This avoids the bug where new checkpoints at already-cached locations would have no forecast data, since extraction happens at read time rather than write time.
+This avoids the bug where new checkpoints at already-cached locations would have no forecast data, since extraction happens at read time rather than write time. The `checkpoint_id` FK ensures a direct lookup — there are no coordinate-equality queries for cache matching.
 
 ### Pacing
 
@@ -117,7 +117,7 @@ The UI uses a dark theme with warm charcoal neutrals:
 
 ## Key Conventions
 
-- Forecast freshness threshold: 1 minute (re-fetch from yr.no if older, configurable via `FORECAST_STALENESS_SECS`).
+- Forecast freshness is controlled by yr.no's `Expires` header — there is no configurable staleness threshold.
 - Pacing model: elevation-adjusted (server-side only). Even pacing as fallback for flat courses.
 - yr.no endpoint: `https://api.met.no/weatherapi/locationforecast/2.0/complete`
 - User-Agent for yr.no: `WeatherBingo/0.1 github.com/LC-Zurich-Doppelstock/weather-bingo`

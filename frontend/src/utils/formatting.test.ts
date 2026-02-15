@@ -7,6 +7,7 @@ import {
   windDirectionLabel,
   formatPercent,
   formatDate,
+  RACE_TIMEZONE,
 } from "./formatting";
 
 describe("formatTemp", () => {
@@ -47,6 +48,23 @@ describe("formatDuration", () => {
   it("formats hours and minutes", () => {
     expect(formatDuration(7.5)).toBe("7h 30m");
   });
+
+  it("handles edge case near rounding boundary (2.999)", () => {
+    // Previously produced "2h 60m" due to floor + round mismatch
+    expect(formatDuration(2.999)).toBe("3h");
+  });
+
+  it("handles edge case near rounding boundary (2.991)", () => {
+    expect(formatDuration(2.991)).toBe("2h 59m");
+  });
+
+  it("formats zero", () => {
+    expect(formatDuration(0)).toBe("0h");
+  });
+
+  it("formats small durations", () => {
+    expect(formatDuration(0.25)).toBe("0h 15m");
+  });
 });
 
 describe("windDirectionLabel", () => {
@@ -86,5 +104,11 @@ describe("formatDate", () => {
   it("handles timezone correctly (Stockholm)", () => {
     // Late UTC time on Feb 28 is Mar 1 in Stockholm (UTC+1)
     expect(formatDate("2026-02-28T23:30:00Z")).toBe("Sun, 1 Mar 2026");
+  });
+});
+
+describe("RACE_TIMEZONE", () => {
+  it("is Europe/Stockholm", () => {
+    expect(RACE_TIMEZONE).toBe("Europe/Stockholm");
   });
 });

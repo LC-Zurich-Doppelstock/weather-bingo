@@ -24,7 +24,7 @@ use services::yr::YrClient;
         version = "0.1.0",
         description = "Race-day weather forecasting API for cross-country skiing. \
             Fetches and caches weather forecasts from yr.no for race checkpoints, \
-            calculates pass-through times using even pacing, and provides \
+            calculates pass-through times using elevation-adjusted pacing, and provides \
             historical forecast data to track how predictions evolve.",
         license(name = "MIT"),
     ),
@@ -134,14 +134,16 @@ async fn main() {
     let app_state = AppState {
         pool: pool.clone(),
         yr_client,
-        forecast_staleness_secs: config.forecast_staleness_secs,
     };
 
-    // CORS
+    // CORS — expose X-Forecast-Stale so the frontend can read it
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+        .expose_headers(["X-Forecast-Stale"
+            .parse::<axum::http::HeaderName>()
+            .unwrap()]);
 
     // Build router
     // Race routes use PgPool state directly; forecast routes use AppState.
@@ -155,7 +157,7 @@ async fn main() {
             "/api/v1/races/:id/checkpoints",
             get(routes::races::get_checkpoints),
         )
-        .with_state(pool);
+        .with_state(pool.clone());
 
     let forecast_routes = Router::new()
         .route(
@@ -172,8 +174,10 @@ async fn main() {
         )
         .with_state(app_state.clone());
 
-    // Health check has no state
-    let health_routes = Router::new().route("/api/v1/health", get(routes::health::health_check));
+    // Health check uses PgPool to verify DB connectivity
+    let health_routes = Router::new()
+        .route("/api/v1/health", get(routes::health::health_check))
+        .with_state(pool);
 
     let app = Router::new()
         .merge(health_routes)
@@ -190,6 +194,10 @@ async fn main() {
         config.port
     );
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .expect("Failed to bind TCP listener");
+    axum::serve(listener, app)
+        .await
+        .expect("Server terminated unexpectedly");
 }

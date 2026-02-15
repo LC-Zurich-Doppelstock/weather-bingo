@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchForecast,
-  fetchForecastHistory,
   fetchRaceForecast,
 } from "../api/client";
 
@@ -11,18 +10,7 @@ export function useForecast(checkpointId: string | null, datetime: string | null
     queryKey: ["forecast", checkpointId, datetime],
     queryFn: () => fetchForecast(checkpointId!, datetime!),
     enabled: !!checkpointId && !!datetime,
-  });
-}
-
-/** Fetch forecast history for a checkpoint. */
-export function useForecastHistory(
-  checkpointId: string | null,
-  datetime: string | null
-) {
-  return useQuery({
-    queryKey: ["forecastHistory", checkpointId, datetime],
-    queryFn: () => fetchForecastHistory(checkpointId!, datetime!),
-    enabled: !!checkpointId && !!datetime,
+    staleTime: 60_000, // 1 minute — forecasts refresh frequently
   });
 }
 
@@ -35,5 +23,6 @@ export function useRaceForecast(
     queryKey: ["raceForecast", raceId, targetDurationHours],
     queryFn: () => fetchRaceForecast(raceId!, targetDurationHours),
     enabled: !!raceId,
+    staleTime: 60_000, // 1 minute
   });
 }

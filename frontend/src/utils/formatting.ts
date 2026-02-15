@@ -2,6 +2,13 @@
  * Formatting utilities for weather data display.
  */
 
+/**
+ * Race timezone. Vasaloppet is in Sweden; all race times are displayed
+ * in this timezone. Extracted as a constant to avoid magic strings and
+ * make it easy to support other races in different timezones later.
+ */
+export const RACE_TIMEZONE = "Europe/Stockholm";
+
 /** Format temperature with degree sign. */
 export function formatTemp(celsius: number): string {
   return `${Math.round(celsius)}°C`;
@@ -19,8 +26,9 @@ export function formatPrecip(mm: number): string {
 
 /** Format a duration in hours to a human-readable string. */
 export function formatDuration(hours: number): string {
-  const h = Math.floor(hours);
-  const m = Math.round((hours - h) * 60);
+  const totalMinutes = Math.round(hours * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
   if (m === 0) return `${h}h`;
   return `${h}h ${m}m`;
 }
@@ -31,7 +39,7 @@ export function formatTime(isoString: string): string {
   return date.toLocaleTimeString("en-GB", {
     hour: "2-digit",
     minute: "2-digit",
-    timeZone: "Europe/Stockholm",
+    timeZone: RACE_TIMEZONE,
   });
 }
 
@@ -42,7 +50,7 @@ export function formatTimeWithZone(isoString: string): string {
     hour: "2-digit",
     minute: "2-digit",
     timeZoneName: "short",
-    timeZone: "Europe/Stockholm",
+    timeZone: RACE_TIMEZONE,
   });
 }
 
@@ -61,7 +69,7 @@ export function formatDate(isoString: string): string {
     day: "numeric",
     month: "short",
     year: "numeric",
-    timeZone: "Europe/Stockholm",
+    timeZone: RACE_TIMEZONE,
   });
 }
 

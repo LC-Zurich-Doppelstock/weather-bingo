@@ -13,6 +13,15 @@ import { fetchForecast } from "../../api/client";
 import { chartColors, colors, uncertaintyOpacity } from "../../styles/theme";
 import { formatTemp, formatPrecip, formatTime, formatWind, windDirectionLabel } from "../../utils/formatting";
 
+// Static style objects hoisted outside the component to avoid recreation on every render
+const tooltipStyle = {
+  backgroundColor: colors.surface,
+  border: `1px solid ${colors.border}`,
+  borderRadius: "6px",
+  color: colors.textPrimary,
+  fontSize: "12px",
+} as const;
+
 interface MiniTimelineProps {
   /** Checkpoint ID to show timeline for. */
   checkpointId: string;
@@ -118,14 +127,6 @@ export default function MiniTimeline({
 
   const hasTempBands = data.some((d) => d.tempP10 !== null && d.tempP90 !== null);
   const hasWindBands = data.some((d) => d.windP10 !== null && d.windP90 !== null);
-
-  const tooltipStyle = {
-    backgroundColor: colors.surface,
-    border: `1px solid ${colors.border}`,
-    borderRadius: "6px",
-    color: colors.textPrimary,
-    fontSize: "12px",
-  };
 
   return (
     <div className="rounded-lg bg-surface-alt p-3" role="img" aria-label="Weather timeline chart">

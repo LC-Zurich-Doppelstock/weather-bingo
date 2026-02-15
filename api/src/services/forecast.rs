@@ -7,15 +7,14 @@
 //! Flow: request → ensure yr.no cache fresh → extract from cached JSON
 //!       in-memory → respond (+ write to forecasts table for history).
 //!
-//! Performance-optimised: uses yr_responses cache (keyed by location) with
-//! yr.no's Expires header for freshness, If-Modified-Since for conditional
-//! requests.
+//! yr_responses is keyed by checkpoint_id (FK to checkpoints), with one
+//! cache row per checkpoint. yr.no's Expires header controls freshness,
+//! If-Modified-Since enables conditional requests.
 
 use chrono::{DateTime, Duration, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use sqlx::PgPool;
-use std::collections::HashMap;
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -207,16 +206,7 @@ pub fn calculate_pass_time_weighted(
     start_time + Duration::seconds(duration_secs)
 }
 
-/// Location key for grouping checkpoints by yr.no coordinate grid.
-/// yr.no rounds to 4 decimal places, so we use the Decimal values from the DB.
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
-struct LocationKey {
-    latitude: Decimal,
-    longitude: Decimal,
-    elevation_m: Decimal,
-}
-
-/// Ensure the yr.no cache is fresh for a given location. Does NOT extract forecasts.
+/// Ensure the yr.no cache is fresh for a given checkpoint. Does NOT extract forecasts.
 ///
 /// Returns the cached raw_response JSON (either still-valid cache or just-fetched).
 /// Callers extract forecast data in-memory from the returned JSON (extract-on-read).
@@ -227,22 +217,22 @@ struct LocationKey {
 async fn ensure_yr_cache_fresh(
     pool: &PgPool,
     yr_client: &YrClient,
-    lat_dec: Decimal,
-    lon_dec: Decimal,
-    ele_dec: Decimal,
+    checkpoint: &Checkpoint,
 ) -> Result<serde_json::Value, AppError> {
+    let checkpoint_id = checkpoint.id;
+
     // 1. Check for a non-expired cached response
-    if let Some(cached) = queries::get_yr_cached_response(pool, lat_dec, lon_dec, ele_dec).await? {
+    if let Some(cached) = queries::get_yr_cached_response(pool, checkpoint_id).await? {
         return Ok(cached.raw_response);
     }
 
     // 2. Cache miss or expired — try conditional request with If-Modified-Since
-    let existing = queries::get_yr_cached_response_any(pool, lat_dec, lon_dec, ele_dec).await?;
+    let existing = queries::get_yr_cached_response_any(pool, checkpoint_id).await?;
     let if_modified_since = existing.as_ref().and_then(|c| c.last_modified.as_deref());
 
-    let lat = lat_dec.to_f64().unwrap_or(0.0);
-    let lon = lon_dec.to_f64().unwrap_or(0.0);
-    let alt = ele_dec.to_f64().unwrap_or(0.0);
+    let lat = checkpoint.latitude.to_f64().unwrap_or(0.0);
+    let lon = checkpoint.longitude.to_f64().unwrap_or(0.0);
+    let alt = checkpoint.elevation_m.to_f64().unwrap_or(0.0);
 
     match yr_client
         .fetch_timeseries(lat, lon, alt, if_modified_since)
@@ -260,9 +250,10 @@ async fn ensure_yr_cache_fresh(
 
             queries::upsert_yr_cached_response(
                 pool,
-                lat_dec,
-                lon_dec,
-                ele_dec,
+                checkpoint_id,
+                checkpoint.latitude,
+                checkpoint.longitude,
+                checkpoint.elevation_m,
                 Utc::now(),
                 expires_at,
                 last_modified.as_deref(),
@@ -276,8 +267,7 @@ async fn ensure_yr_cache_fresh(
             if let Some(cached) = existing {
                 // Just bump expires_at — don't re-write the full JSON blob
                 let new_expires = Utc::now() + Duration::hours(1);
-                queries::update_yr_cache_expiry(pool, lat_dec, lon_dec, ele_dec, new_expires)
-                    .await?;
+                queries::update_yr_cache_expiry(pool, checkpoint_id, new_expires).await?;
                 Ok(cached.raw_response)
             } else {
                 Err(AppError::ExternalServiceError(
@@ -344,18 +334,9 @@ pub async fn resolve_forecast(
     yr_client: &YrClient,
     checkpoint: &Checkpoint,
     forecast_time: DateTime<Utc>,
-    _staleness_secs: u64,
 ) -> Result<(Option<Forecast>, bool), AppError> {
     // Step 1: Try to get fresh yr.no data
-    let raw_json = match ensure_yr_cache_fresh(
-        pool,
-        yr_client,
-        checkpoint.latitude,
-        checkpoint.longitude,
-        checkpoint.elevation_m,
-    )
-    .await
-    {
+    let raw_json = match ensure_yr_cache_fresh(pool, yr_client, checkpoint).await {
         Ok(json) => json,
         Err(e) => {
             // yr.no failed — fall back to cached forecast from DB
@@ -410,151 +391,125 @@ pub struct ResolvedForecast {
 
 /// Resolve forecasts for multiple checkpoints in a race — extract-on-read.
 ///
-/// 1. Group checkpoints by location (yr.no grid coordinate)
-/// 2. `ensure_yr_cache_fresh` for each unique location (parallel)
-/// 3. Extract forecasts from cached JSON in-memory for all checkpoints
-/// 4. Write to forecasts table for history (ON CONFLICT DO NOTHING)
-/// 5. Re-query DB for canonical Forecast rows
+/// 1. `ensure_yr_cache_fresh` for each checkpoint (parallel)
+/// 2. Extract forecasts from cached JSON in-memory for all checkpoints
+/// 3. Write to forecasts table for history (ON CONFLICT DO NOTHING)
+/// 4. Re-query DB for canonical Forecast rows (batch)
 ///
-/// This fixes the cache-valid-but-no-extracted-forecast bug and eliminates
-/// the N+1 query pattern from the old extract-on-write architecture.
+/// Each checkpoint has its own yr_responses row (keyed by checkpoint_id FK),
+/// so there is no location-based grouping.
 pub async fn resolve_race_forecasts(
     pool: &PgPool,
     yr_client: &YrClient,
     checkpoints: &[CheckpointWithTime],
-    _staleness_secs: u64,
 ) -> Result<Vec<ResolvedForecast>, AppError> {
     let n = checkpoints.len();
 
-    // ── Step 1: Group checkpoints by location ──
-    let mut location_groups: HashMap<LocationKey, Vec<usize>> = HashMap::new();
-    for (idx, cpwt) in checkpoints.iter().enumerate() {
-        let key = LocationKey {
-            latitude: cpwt.checkpoint.latitude,
-            longitude: cpwt.checkpoint.longitude,
-            elevation_m: cpwt.checkpoint.elevation_m,
-        };
-        location_groups.entry(key).or_default().push(idx);
-    }
+    // ── Step 1: Ensure yr.no cache fresh for each checkpoint (bounded parallel) ──
+    // Limit concurrency to avoid overwhelming yr.no with simultaneous requests.
+    use futures::stream::{self, StreamExt};
+    const MAX_CONCURRENT_YR_FETCHES: usize = 4;
 
-    // ── Step 2: Ensure yr.no cache fresh for each unique location (parallel) ──
-    let location_keys: Vec<LocationKey> = location_groups.keys().cloned().collect();
-    let mut fetch_futures = Vec::new();
+    let futures: Vec<_> = checkpoints
+        .iter()
+        .map(|cpwt| {
+            let pool = pool.clone();
+            let yr_client = yr_client.clone();
+            let checkpoint = cpwt.checkpoint.clone();
+            async move { ensure_yr_cache_fresh(&pool, &yr_client, &checkpoint).await }
+        })
+        .collect();
 
-    for key in &location_keys {
-        let pool = pool.clone();
-        let yr_client = yr_client.clone();
-        let lat = key.latitude;
-        let lon = key.longitude;
-        let ele = key.elevation_m;
+    let fetch_results: Vec<Result<serde_json::Value, AppError>> = stream::iter(futures)
+        .buffer_unordered(MAX_CONCURRENT_YR_FETCHES)
+        .collect()
+        .await;
 
-        fetch_futures
-            .push(async move { ensure_yr_cache_fresh(&pool, &yr_client, lat, lon, ele).await });
-    }
-
-    let fetch_results = futures::future::join_all(fetch_futures).await;
-
-    // ── Step 3: Build location → JSON map, handling errors with DB fallback ──
-    let mut location_json: HashMap<LocationKey, serde_json::Value> = HashMap::new();
-    let mut stale_locations: std::collections::HashSet<LocationKey> =
-        std::collections::HashSet::new();
-
-    // Pre-fetch cached forecasts for fallback (only if needed)
+    // ── Step 2: Handle results, falling back to DB cache on error ──
+    // Pre-fetch cached forecasts for fallback (batch query)
     let pairs: Vec<(Uuid, DateTime<Utc>)> = checkpoints
         .iter()
         .map(|cpwt| (cpwt.checkpoint.id, cpwt.forecast_time))
         .collect();
-    // We batch-query cached forecasts upfront so we have stale fallbacks available
     let cached_forecasts = queries::get_latest_forecasts_batch(pool, &pairs).await?;
 
-    for (loc_idx, fetch_result) in fetch_results.into_iter().enumerate() {
-        let key = location_keys[loc_idx].clone();
+    let mut results: Vec<Option<ResolvedForecast>> = vec![None; n];
+
+    for (idx, fetch_result) in fetch_results.into_iter().enumerate() {
         match fetch_result {
-            Ok(json) => {
-                location_json.insert(key, json);
+            Ok(raw_json) => {
+                // Extract forecast from cached JSON in-memory
+                let forecast_time = checkpoints[idx].forecast_time;
+                let parsed = extract_forecasts_at_times(raw_json, &[forecast_time])?;
+                let maybe_parsed = parsed.into_iter().next().flatten();
+
+                match maybe_parsed {
+                    Some(ref forecast_data) => {
+                        // Write to forecasts table for history (ON CONFLICT DO NOTHING)
+                        let params = build_single_insert_params(
+                            checkpoints[idx].checkpoint.id,
+                            forecast_data,
+                            Utc::now(),
+                        );
+                        let _ = queries::insert_forecast(pool, params).await?;
+
+                        // Mark for batch re-query below
+                        results[idx] = None; // will be filled by batch re-query
+                    }
+                    None => {
+                        // Beyond yr.no horizon — no forecast available
+                        results[idx] = Some(ResolvedForecast {
+                            forecast: None,
+                            is_stale: false,
+                        });
+                    }
+                }
             }
             Err(e) => {
-                // yr.no failed for this location — check if we have stale DB fallbacks
-                let cp_indices = &location_groups[&key];
-                let any_without_fallback = cp_indices
-                    .iter()
-                    .any(|&idx| cached_forecasts[idx].is_none());
-
-                if any_without_fallback {
+                // yr.no failed for this checkpoint — fall back to cached forecast
+                if let Some(cached) = cached_forecasts[idx].clone() {
+                    tracing::warn!(
+                        "yr.no unavailable for checkpoint {}, will use stale DB data: {}",
+                        checkpoints[idx].checkpoint.id,
+                        e
+                    );
+                    results[idx] = Some(ResolvedForecast {
+                        forecast: Some(cached),
+                        is_stale: true,
+                    });
+                } else {
                     return Err(AppError::ExternalServiceError(format!(
-                        "yr.no unavailable for location ({}, {}) and no cached data: {}",
-                        key.latitude, key.longitude, e
+                        "yr.no unavailable for checkpoint {} and no cached data: {}",
+                        checkpoints[idx].checkpoint.id, e
                     )));
                 }
-
-                tracing::warn!(
-                    "yr.no unavailable for location ({}, {}), will use stale DB data: {}",
-                    key.latitude,
-                    key.longitude,
-                    e
-                );
-                stale_locations.insert(key);
             }
         }
     }
 
-    // ── Step 4: Extract forecasts from JSON + write to DB for history ──
-    let mut results: Vec<Option<ResolvedForecast>> = vec![None; n];
+    // ── Step 3: Batch re-query DB for canonical Forecast rows ──
+    // Collect indices that need re-query (successfully extracted, not stale fallback)
+    let requery_pairs: Vec<(Uuid, DateTime<Utc>)> = results
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.is_none())
+        .map(|(idx, _)| {
+            (
+                checkpoints[idx].checkpoint.id,
+                checkpoints[idx].forecast_time,
+            )
+        })
+        .collect();
 
-    for (key, cp_indices) in &location_groups {
-        if stale_locations.contains(key) {
-            // Use stale DB fallback for this location
-            for &idx in cp_indices {
-                results[idx] = Some(ResolvedForecast {
-                    forecast: cached_forecasts[idx].clone(),
-                    is_stale: true,
-                });
-            }
-            continue;
-        }
+    let requeried = queries::get_latest_forecasts_batch(pool, &requery_pairs).await?;
 
-        let raw_json = &location_json[key];
-
-        // Collect forecast times for all checkpoints at this location
-        let forecast_times: Vec<DateTime<Utc>> = cp_indices
-            .iter()
-            .map(|&idx| checkpoints[idx].forecast_time)
-            .collect();
-
-        // Extract all at once (single JSON deserialization per location)
-        let parsed = extract_forecasts_at_times(raw_json.clone(), &forecast_times)?;
-        let now = Utc::now();
-
-        for (i, &cp_idx) in cp_indices.iter().enumerate() {
-            if let Some(ref forecast_data) = parsed[i] {
-                // Write to forecasts table for history (ON CONFLICT DO NOTHING)
-                let params = build_single_insert_params(
-                    checkpoints[cp_idx].checkpoint.id,
-                    forecast_data,
-                    now,
-                );
-                let _ = queries::insert_forecast(pool, params).await?;
-            }
-        }
-
-        // Re-query DB for canonical Forecast rows (batch for this location's checkpoints)
-        for (i, &cp_idx) in cp_indices.iter().enumerate() {
-            if parsed[i].is_some() {
-                let cpwt = &checkpoints[cp_idx];
-                let forecast =
-                    queries::get_latest_forecast(pool, cpwt.checkpoint.id, cpwt.forecast_time)
-                        .await?;
-                results[cp_idx] = Some(ResolvedForecast {
-                    forecast,
-                    is_stale: false,
-                });
-            } else {
-                // Beyond yr.no horizon — no forecast available
-                results[cp_idx] = Some(ResolvedForecast {
-                    forecast: None,
-                    is_stale: false,
-                });
-            }
+    let mut requery_iter = requeried.into_iter();
+    for result in results.iter_mut() {
+        if result.is_none() {
+            *result = Some(ResolvedForecast {
+                forecast: requery_iter.next().unwrap_or(None),
+                is_stale: false,
+            });
         }
     }
 

@@ -8,7 +8,9 @@ use super::models::{Checkpoint, Forecast, Race, YrCachedResponse};
 
 /// Forecast time tolerance window (hours). SQL queries use a ±N hour BETWEEN
 /// range so the composite index (checkpoint_id, forecast_time, fetched_at DESC)
-/// drives the scan. This constant keeps the value in sync across all queries.
+/// drives the scan. This compile-time constant is interpolated into SQL via
+/// `format!` — this is safe because it's not user input. PostgreSQL doesn't
+/// support `$N` bind parameters inside `INTERVAL` literals.
 pub const FORECAST_TIME_TOLERANCE_HOURS: i32 = 3;
 
 /// Internal helper for the batch forecast query — includes an `idx` column
@@ -118,44 +120,35 @@ pub struct InsertForecastParams {
 // yr_responses CRUD
 // ---------------------------------------------------------------------------
 
-/// Get a cached yr.no response for a location, only if it hasn't expired.
+/// Get a cached yr.no response for a checkpoint, only if it hasn't expired.
 pub async fn get_yr_cached_response(
     pool: &PgPool,
-    latitude: Decimal,
-    longitude: Decimal,
-    elevation_m: Decimal,
+    checkpoint_id: Uuid,
 ) -> Result<Option<YrCachedResponse>, sqlx::Error> {
     sqlx::query_as::<_, YrCachedResponse>(
-        "SELECT id, latitude, longitude, elevation_m, fetched_at, expires_at,
+        "SELECT id, checkpoint_id, latitude, longitude, elevation_m, fetched_at, expires_at,
                 last_modified, raw_response, created_at
          FROM yr_responses
-         WHERE latitude = $1 AND longitude = $2 AND elevation_m = $3
+         WHERE checkpoint_id = $1
            AND expires_at > NOW()",
     )
-    .bind(latitude)
-    .bind(longitude)
-    .bind(elevation_m)
+    .bind(checkpoint_id)
     .fetch_optional(pool)
     .await
 }
 
-/// Get a cached yr.no response for a location regardless of expiry (for If-Modified-Since).
+/// Get a cached yr.no response for a checkpoint regardless of expiry (for If-Modified-Since).
 pub async fn get_yr_cached_response_any(
     pool: &PgPool,
-    latitude: Decimal,
-    longitude: Decimal,
-    elevation_m: Decimal,
+    checkpoint_id: Uuid,
 ) -> Result<Option<YrCachedResponse>, sqlx::Error> {
     sqlx::query_as::<_, YrCachedResponse>(
-        "SELECT id, latitude, longitude, elevation_m, fetched_at, expires_at,
+        "SELECT id, checkpoint_id, latitude, longitude, elevation_m, fetched_at, expires_at,
                 last_modified, raw_response, created_at
          FROM yr_responses
-         WHERE latitude = $1 AND longitude = $2 AND elevation_m = $3
-         LIMIT 1",
+         WHERE checkpoint_id = $1",
     )
-    .bind(latitude)
-    .bind(longitude)
-    .bind(elevation_m)
+    .bind(checkpoint_id)
     .fetch_optional(pool)
     .await
 }
@@ -165,28 +158,25 @@ pub async fn get_yr_cached_response_any(
 /// yr.no returns 304 Not Modified (data unchanged, just bump the TTL).
 pub async fn update_yr_cache_expiry(
     pool: &PgPool,
-    latitude: Decimal,
-    longitude: Decimal,
-    elevation_m: Decimal,
+    checkpoint_id: Uuid,
     expires_at: DateTime<Utc>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE yr_responses SET expires_at = $4
-         WHERE latitude = $1 AND longitude = $2 AND elevation_m = $3",
+        "UPDATE yr_responses SET expires_at = $2
+         WHERE checkpoint_id = $1",
     )
-    .bind(latitude)
-    .bind(longitude)
-    .bind(elevation_m)
+    .bind(checkpoint_id)
     .bind(expires_at)
     .execute(pool)
     .await?;
     Ok(())
 }
 
-/// Upsert (insert or update) a yr.no cached response for a location.
+/// Upsert (insert or update) a yr.no cached response for a checkpoint.
 #[allow(clippy::too_many_arguments)]
 pub async fn upsert_yr_cached_response(
     pool: &PgPool,
+    checkpoint_id: Uuid,
     latitude: Decimal,
     longitude: Decimal,
     elevation_m: Decimal,
@@ -196,15 +186,19 @@ pub async fn upsert_yr_cached_response(
     raw_response: &serde_json::Value,
 ) -> Result<YrCachedResponse, sqlx::Error> {
     sqlx::query_as::<_, YrCachedResponse>(
-        "INSERT INTO yr_responses (id, latitude, longitude, elevation_m, fetched_at, expires_at, last_modified, raw_response)
-         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (latitude, longitude, elevation_m) DO UPDATE SET
+        "INSERT INTO yr_responses (id, checkpoint_id, latitude, longitude, elevation_m, fetched_at, expires_at, last_modified, raw_response)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (checkpoint_id) DO UPDATE SET
+             latitude = EXCLUDED.latitude,
+             longitude = EXCLUDED.longitude,
+             elevation_m = EXCLUDED.elevation_m,
              fetched_at = EXCLUDED.fetched_at,
              expires_at = EXCLUDED.expires_at,
              last_modified = EXCLUDED.last_modified,
              raw_response = EXCLUDED.raw_response
-         RETURNING id, latitude, longitude, elevation_m, fetched_at, expires_at, last_modified, raw_response, created_at",
+         RETURNING id, checkpoint_id, latitude, longitude, elevation_m, fetched_at, expires_at, last_modified, raw_response, created_at",
     )
+    .bind(checkpoint_id)
     .bind(latitude)
     .bind(longitude)
     .bind(elevation_m)
@@ -468,10 +462,14 @@ pub async fn get_checkpoint(
 ///
 /// Uses INSERT ON CONFLICT (name, year) for the race, and
 /// INSERT ON CONFLICT (race_id, sort_order) for each checkpoint.
+/// Deletes orphan checkpoints that no longer exist in the GPX.
+/// All operations run within a single transaction.
 /// Returns the race UUID (existing or newly created).
 pub async fn upsert_race_from_gpx(pool: &PgPool, race: &GpxRace) -> Result<Uuid, sqlx::Error> {
     let distance_km = f64_to_dec(race.distance_km);
     let start_time_utc: chrono::DateTime<chrono::Utc> = race.start_time.into();
+
+    let mut tx = pool.begin().await?;
 
     // Upsert the race
     let row: (Uuid,) = sqlx::query_as(
@@ -489,7 +487,7 @@ pub async fn upsert_race_from_gpx(pool: &PgPool, race: &GpxRace) -> Result<Uuid,
     .bind(start_time_utc)
     .bind(distance_km)
     .bind(&race.gpx_xml)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     let race_id = row.0;
@@ -520,9 +518,20 @@ pub async fn upsert_race_from_gpx(pool: &PgPool, race: &GpxRace) -> Result<Uuid,
         .bind(cp_lon)
         .bind(cp_ele)
         .bind(sort_order)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
+
+    // Delete orphan checkpoints whose sort_order is beyond the new checkpoint count.
+    // This handles the case where a re-seed has fewer checkpoints than before.
+    let max_sort_order = race.checkpoints.len() as i32;
+    sqlx::query("DELETE FROM checkpoints WHERE race_id = $1 AND sort_order >= $2")
+        .bind(race_id)
+        .bind(max_sort_order)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
 
     Ok(race_id)
 }

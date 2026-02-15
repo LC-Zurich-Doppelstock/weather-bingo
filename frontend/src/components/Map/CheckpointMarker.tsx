@@ -1,4 +1,4 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useMemo } from "react";
 import { CircleMarker, Tooltip } from "react-leaflet";
 import type { Checkpoint } from "../../api/types";
 import { colors } from "../../styles/theme";
@@ -42,21 +42,32 @@ const CheckpointMarker = memo(function CheckpointMarker({
 
   const highlighted = isSelected || isHovered;
 
+  // Memoize to prevent Leaflet from re-binding on every render
+  const pathOptions = useMemo(
+    () => ({
+      color: colors.accentRose,
+      fillColor: highlighted ? colors.accentRose : colors.surface,
+      fillOpacity: highlighted ? 1 : 0.8,
+      weight: highlighted ? 3 : 2,
+    }),
+    [highlighted]
+  );
+
+  const eventHandlers = useMemo(
+    () => ({
+      click: handleClick,
+      mouseover: handleMouseOver,
+      mouseout: handleMouseOut,
+    }),
+    [handleClick, handleMouseOver, handleMouseOut]
+  );
+
   return (
     <CircleMarker
       center={[checkpoint.latitude, checkpoint.longitude]}
       radius={highlighted ? 8 : 6}
-      pathOptions={{
-        color: colors.accentRose,
-        fillColor: highlighted ? colors.accentRose : colors.surface,
-        fillOpacity: highlighted ? 1 : 0.8,
-        weight: highlighted ? 3 : 2,
-      }}
-      eventHandlers={{
-        click: handleClick,
-        mouseover: handleMouseOver,
-        mouseout: handleMouseOut,
-      }}
+      pathOptions={pathOptions}
+      eventHandlers={eventHandlers}
     >
       <Tooltip
         direction="top"
