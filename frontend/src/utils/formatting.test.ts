@@ -4,6 +4,8 @@ import {
   formatWind,
   formatPrecip,
   formatDuration,
+  formatTime,
+  formatTimeWithZone,
   windDirectionLabel,
   formatPercent,
   formatDate,
@@ -87,6 +89,22 @@ describe("windDirectionLabel", () => {
   it("returns N for 360 degrees", () => {
     expect(windDirectionLabel(360)).toBe("N");
   });
+
+  it("normalizes negative degrees (-45 → NW)", () => {
+    expect(windDirectionLabel(-45)).toBe("NW");
+  });
+
+  it("normalizes negative degrees (-90 → W)", () => {
+    expect(windDirectionLabel(-90)).toBe("W");
+  });
+
+  it("normalizes >360 degrees (405 → NE)", () => {
+    expect(windDirectionLabel(405)).toBe("NE");
+  });
+
+  it("normalizes large negative (-315 → NE)", () => {
+    expect(windDirectionLabel(-315)).toBe("NE");
+  });
 });
 
 describe("formatPercent", () => {
@@ -97,13 +115,58 @@ describe("formatPercent", () => {
 
 describe("formatDate", () => {
   it("formats ISO date to readable date", () => {
-    // 2026-03-01 is a Sunday
-    expect(formatDate("2026-03-01T07:00:00Z")).toBe("Sun, 1 Mar 2026");
+    // 2026-03-01 is a Sunday. Use partial matching for locale resilience
+    // (some Node versions may use "1 Mar" vs "1 Mar." etc.)
+    const result = formatDate("2026-03-01T07:00:00Z");
+    expect(result).toContain("Sun");
+    expect(result).toContain("Mar");
+    expect(result).toContain("2026");
+    expect(result).toContain("1");
   });
 
   it("handles timezone correctly (Stockholm)", () => {
     // Late UTC time on Feb 28 is Mar 1 in Stockholm (UTC+1)
-    expect(formatDate("2026-02-28T23:30:00Z")).toBe("Sun, 1 Mar 2026");
+    const result = formatDate("2026-02-28T23:30:00Z");
+    expect(result).toContain("Sun");
+    expect(result).toContain("Mar");
+    expect(result).toContain("2026");
+  });
+});
+
+describe("formatTime", () => {
+  it("formats ISO string to HH:MM in Stockholm timezone", () => {
+    // 07:00 UTC = 08:00 CET (Stockholm, UTC+1 in winter)
+    expect(formatTime("2026-03-01T07:00:00Z")).toBe("08:00");
+  });
+
+  it("formats afternoon time correctly", () => {
+    // 14:30 UTC = 15:30 CET
+    expect(formatTime("2026-03-01T14:30:00Z")).toBe("15:30");
+  });
+
+  it("handles midnight crossing", () => {
+    // 23:30 UTC on Feb 28 = 00:30 CET on Mar 1
+    expect(formatTime("2026-02-28T23:30:00Z")).toBe("00:30");
+  });
+
+  it("formats time with minutes", () => {
+    // 09:24 UTC = 10:24 CET
+    expect(formatTime("2026-03-01T09:24:00Z")).toBe("10:24");
+  });
+});
+
+describe("formatTimeWithZone", () => {
+  it("formats time with timezone label", () => {
+    // 07:00 UTC = 08:00 CET
+    const result = formatTimeWithZone("2026-03-01T07:00:00Z");
+    expect(result).toContain("08:00");
+    // Timezone label varies by environment (CET, GMT+1, etc.)
+    expect(result.length).toBeGreaterThan(5);
+  });
+
+  it("includes timezone for afternoon time", () => {
+    const result = formatTimeWithZone("2026-03-01T14:30:00Z");
+    expect(result).toContain("15:30");
   });
 });
 

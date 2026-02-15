@@ -137,11 +137,19 @@ export default function CheckpointDetail({
         )}
       </WeatherRow>
 
-      {/* Humidity & Cloud cover */}
+      {/* Humidity & Cloud cover & Dew point */}
       {w.humidity_pct != null && (
         <WeatherRow label="Humidity">
           <div className="text-text-primary">
             {formatPercent(w.humidity_pct)}
+          </div>
+        </WeatherRow>
+      )}
+
+      {w.dew_point_c != null && (
+        <WeatherRow label="Dew point">
+          <div className="text-text-primary">
+            {formatTemp(w.dew_point_c)}
           </div>
         </WeatherRow>
       )}

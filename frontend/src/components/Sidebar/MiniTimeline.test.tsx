@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterEach, afterAll } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
@@ -131,8 +131,9 @@ describe("MiniTimeline", () => {
     // and since there's no temperature data, the component returns null
     await screen.findByText("Timeline"); // loading state shows this
     // Wait for data to settle — no chart should render
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(container.querySelector("[role='img']")).toBeNull();
+    await waitFor(() => {
+      expect(container.querySelector("[role='img']")).toBeNull();
+    });
   });
 
   it("shows legend text", async () => {

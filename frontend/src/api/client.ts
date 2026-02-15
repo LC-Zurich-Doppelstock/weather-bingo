@@ -14,13 +14,59 @@ import type {
 
 const BASE_URL = "/api/v1";
 
+/**
+ * Wraps a fetch response with metadata about staleness.
+ * When the API returns X-Forecast-Stale: true, the data is cached
+ * from a previous fetch and yr.no was unreachable for a refresh.
+ */
+export interface ApiResponse<T> {
+  data: T;
+  stale: boolean;
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+  let response: Response;
+  try {
+    response = await fetch(url);
+  } catch (err) {
+    // Network failure (offline, DNS, CORS, etc.)
+    if (err instanceof TypeError) {
+      throw new Error(
+        "Network error: unable to reach the server. Check your connection and try again."
+      );
+    }
+    throw err;
+  }
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: response.statusText }));
     throw new Error(error.error || `HTTP ${response.status}`);
   }
   return response.json();
+}
+
+/**
+ * Like fetchJson but also reads the X-Forecast-Stale header.
+ * Used for forecast endpoints that may serve cached data.
+ */
+async function fetchJsonWithStale<T>(url: string): Promise<ApiResponse<T>> {
+  let response: Response;
+  try {
+    response = await fetch(url);
+  } catch (err) {
+    if (err instanceof TypeError) {
+      throw new Error(
+        "Network error: unable to reach the server. Check your connection and try again."
+      );
+    }
+    throw err;
+  }
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(error.error || `HTTP ${response.status}`);
+  }
+  const stale = response.headers.get("X-Forecast-Stale") === "true";
+  const data: T = await response.json();
+  return { data, stale };
 }
 
 /** List all available races. */
@@ -58,12 +104,25 @@ export function fetchForecastHistory(
   );
 }
 
-/** Get forecasts for all checkpoints in a race. */
+/** Get forecasts for all checkpoints in a race (with stale header). */
 export function fetchRaceForecast(
   raceId: string,
   targetDurationHours: number
 ): Promise<RaceForecastResponse> {
-  return fetchJson<RaceForecastResponse>(
+  return fetchJsonWithStale<RaceForecastResponse>(
+    `${BASE_URL}/forecasts/race/${raceId}?target_duration_hours=${targetDurationHours}`
+  ).then((r) => r.data);
+}
+
+/**
+ * Fetch race forecast with staleness metadata.
+ * Consumers that need to react to the X-Forecast-Stale header can use this.
+ */
+export function fetchRaceForecastWithStale(
+  raceId: string,
+  targetDurationHours: number
+): Promise<ApiResponse<RaceForecastResponse>> {
+  return fetchJsonWithStale<RaceForecastResponse>(
     `${BASE_URL}/forecasts/race/${raceId}?target_duration_hours=${targetDurationHours}`
   );
 }

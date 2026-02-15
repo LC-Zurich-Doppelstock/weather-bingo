@@ -118,7 +118,25 @@ Table: forecasts
 
 > **Note:** Forecast data is append-only. Fresh data from yr.no is cached as raw JSON in `yr_responses` and extracted on-read (see Section 4.2). The extracted forecast entry is also written to the `forecasts` table for history tracking using `ON CONFLICT DO NOTHING` on the partial unique index `(checkpoint_id, forecast_time, yr_model_run_at) WHERE yr_model_run_at IS NOT NULL`, preventing duplicate rows. The `fetched_at` column distinguishes forecast versions from different model runs.
 
-### 3.4 Indexes & Constraints
+### 3.4 yr.no Response Cache
+
+```
+Table: yr_responses
+├── id              UUID        PK
+├── checkpoint_id   UUID        FK → checkpoints.id (ON DELETE CASCADE), UNIQUE, NOT NULL
+├── latitude        DECIMAL(8,4)  Original fetch coordinates (kept for reference)
+├── longitude       DECIMAL(8,4)
+├── elevation_m     DECIMAL(6,0)
+├── fetched_at      TIMESTAMPTZ When the yr.no response was retrieved
+├── expires_at      TIMESTAMPTZ yr.no Expires header value (controls cache freshness)
+├── last_modified   TEXT        yr.no Last-Modified header (for conditional requests)
+├── raw_response    JSONB       Full yr.no timeseries JSON (~10 days of data)
+└── created_at      TIMESTAMPTZ
+```
+
+> **Note:** One row per checkpoint (upserted on each fetch). The `checkpoint_id` FK with `ON DELETE CASCADE` ensures cache rows are cleaned up when checkpoints are deleted (e.g. during re-seed). Freshness is determined by `expires_at` — the API considers the cache stale when `NOW() > expires_at`. The `last_modified` value is sent as `If-Modified-Since` on subsequent requests to avoid unnecessary data transfer when yr.no returns 304 Not Modified.
+
+### 3.5 Indexes & Constraints
 
 - `UNIQUE (name, year)` on `races` — enables idempotent upsert during GPX seeding
 - `UNIQUE (race_id, sort_order)` on `checkpoints` — enables idempotent upsert during GPX seeding
@@ -213,8 +231,8 @@ For the race endpoint, all checkpoints are resolved in parallel:
 
 ### 4.3 Forecast Freshness
 
-- The API checks for new forecast data from yr.no when serving a request if the most recent `fetched_at` for that location is older than the configured staleness threshold (default: **60 seconds**, configurable via `FORECAST_STALENESS_SECS`).
-- yr.no's `Expires` / `Last-Modified` headers should be respected to avoid unnecessary calls.
+- Forecast freshness is controlled by yr.no's `Expires` header. The API stores the `Expires` value from each yr.no response and considers the cache stale only when the current time exceeds that value. There is no configurable staleness threshold.
+- `If-Modified-Since` / `Last-Modified` headers are used for conditional requests to avoid unnecessary data transfer.
 - yr.no API usage must comply with their [Terms of Service](https://api.met.no/doc/TermsOfService) (identify via `User-Agent` header).
 
 ### 4.3.1 Configuration (Environment Variables)
@@ -224,7 +242,6 @@ For the race endpoint, all checkpoints are resolved in parallel:
 | `DATABASE_URL` | Yes | — | PostgreSQL connection string |
 | `YR_USER_AGENT` | No | `WeatherBingo/0.1 github.com/LC-Zurich-Doppelstock/weather-bingo` | User-Agent for yr.no API requests |
 | `PORT` | No | `8080` | HTTP server listen port |
-| `FORECAST_STALENESS_SECS` | No | `60` | Seconds before a cached forecast is considered stale |
 | `DATA_DIR` | No | `./data` | Directory containing GPX files for race seeding at startup |
 
 ### 4.4 yr.no Integration
@@ -674,9 +691,11 @@ weather-bingo/
 │   │   │   └── ErrorBoundary.tsx
 │   │   ├── hooks/              # Custom React hooks
 │   │   │   ├── useRace.ts
-│   │   │   └── useForecast.ts
+│   │   │   ├── useForecast.ts
+│   │   │   └── useDebouncedValue.ts
 │   │   ├── utils/              # Helpers (formatting)
-│   │   │   └── formatting.ts
+│   │   │   ├── formatting.ts
+│   │   │   └── formatting.test.ts
 │   │   └── styles/
 │   │       └── theme.ts        # Colour palette constants
 │   └── public/

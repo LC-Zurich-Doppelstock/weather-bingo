@@ -83,9 +83,12 @@ impl ForecastWithIdx {
 }
 use crate::services::gpx::GpxRace;
 
-/// Convert an f64 to a `Decimal`, falling back to a truncated integer representation
-/// if the float cannot be exactly represented (e.g. NaN or infinity).
+/// Convert an f64 to a `Decimal`, falling back to zero for non-finite values (NaN, ±Inf).
 fn f64_to_dec(v: f64) -> Decimal {
+    if !v.is_finite() {
+        tracing::warn!("f64_to_dec received non-finite value {}, defaulting to 0", v);
+        return Decimal::ZERO;
+    }
     Decimal::from_f64(v).unwrap_or_else(|| Decimal::new(v as i64, 0))
 }
 
@@ -153,20 +156,22 @@ pub async fn get_yr_cached_response_any(
     .await
 }
 
-/// Update only the expires_at on an existing yr.no cached response.
-/// Much cheaper than upserting the full raw_response JSON blob — used when
-/// yr.no returns 304 Not Modified (data unchanged, just bump the TTL).
-pub async fn update_yr_cache_expiry(
+/// Update expires_at and optionally last_modified on a yr.no cached response.
+/// Used when yr.no returns 304 Not Modified with updated caching headers.
+/// If `last_modified` is None, the existing value is preserved via COALESCE.
+pub async fn update_yr_cache_expiry_and_last_modified(
     pool: &PgPool,
     checkpoint_id: Uuid,
     expires_at: DateTime<Utc>,
+    last_modified: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE yr_responses SET expires_at = $2
+        "UPDATE yr_responses SET expires_at = $2, last_modified = COALESCE($3, last_modified)
          WHERE checkpoint_id = $1",
     )
     .bind(checkpoint_id)
     .bind(expires_at)
+    .bind(last_modified)
     .execute(pool)
     .await?;
     Ok(())
@@ -338,7 +343,15 @@ pub async fn get_latest_forecasts_batch(
     let mut results: Vec<Option<Forecast>> = vec![None; pairs.len()];
     for row in rows {
         let idx = (row.idx - 1) as usize; // ORDINALITY is 1-based
-                                          // If the LEFT JOIN found no match, the forecast fields will be NULL
+        if idx >= results.len() {
+            tracing::warn!(
+                "get_latest_forecasts_batch: ORDINALITY index {} out of bounds (len={}), skipping",
+                row.idx,
+                pairs.len(),
+            );
+            continue;
+        }
+        // If the LEFT JOIN found no match, the forecast fields will be NULL
         if let Some(forecast) = row.into_forecast() {
             results[idx] = Some(forecast);
         }
@@ -347,8 +360,13 @@ pub async fn get_latest_forecasts_batch(
     Ok(results)
 }
 
+/// Maximum number of history entries returned per checkpoint.
+/// Prevents unbounded result sets for long-running forecast tracking.
+pub const MAX_FORECAST_HISTORY_ENTRIES: i32 = 200;
+
 /// Get forecast history for a checkpoint at a specific forecast time.
-/// Returns all fetched versions, ordered by fetched_at ascending.
+/// Returns all fetched versions (up to `MAX_FORECAST_HISTORY_ENTRIES`),
+/// ordered by fetched_at ascending.
 pub async fn get_forecast_history(
     pool: &PgPool,
     checkpoint_id: Uuid,
@@ -371,8 +389,10 @@ pub async fn get_forecast_history(
                ORDER BY ABS(EXTRACT(EPOCH FROM (forecast_time - $2)))
                LIMIT 1
            )
-         ORDER BY fetched_at ASC",
+         ORDER BY fetched_at ASC
+         LIMIT {limit}",
         h = FORECAST_TIME_TOLERANCE_HOURS,
+        limit = MAX_FORECAST_HISTORY_ENTRIES,
     );
     sqlx::query_as::<_, Forecast>(&query)
         .bind(checkpoint_id)
@@ -385,13 +405,19 @@ pub async fn get_forecast_history(
 /// `(checkpoint_id, forecast_time, yr_model_run_at)`.
 ///
 /// Uses `ON CONFLICT DO NOTHING` so re-inserting the same yr.no time slot
-/// from the same model run is a no-op. Returns `Some(Forecast)` when a new
-/// row was inserted, or `None` when it already existed.
+/// from the same model run is a no-op. Handles both cases:
+/// - yr_model_run_at IS NOT NULL → partial unique index on 3 columns
+/// - yr_model_run_at IS NULL → partial unique index on (checkpoint_id, forecast_time)
+///
+/// Returns `Some(Forecast)` when a new row was inserted, or `None` when
+/// it already existed (deduplicated).
 pub async fn insert_forecast(
     pool: &PgPool,
     p: InsertForecastParams,
 ) -> Result<Option<Forecast>, sqlx::Error> {
-    sqlx::query_as::<_, Forecast>(
+    // Choose the appropriate ON CONFLICT clause based on whether yr_model_run_at is set.
+    // PostgreSQL requires the conflict target to match a specific unique index.
+    let sql = if p.yr_model_run_at.is_some() {
         "INSERT INTO forecasts (
             id, checkpoint_id, forecast_time, fetched_at, source,
             temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
@@ -415,8 +441,35 @@ pub async fn insert_forecast(
                    wind_direction_deg, wind_gust_ms,
                    precipitation_mm, precipitation_min_mm, precipitation_max_mm,
                    humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-                   feels_like_c, precipitation_type, yr_model_run_at, created_at",
-    )
+                   feels_like_c, precipitation_type, yr_model_run_at, created_at"
+    } else {
+        "INSERT INTO forecasts (
+            id, checkpoint_id, forecast_time, fetched_at, source,
+            temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
+            wind_speed_ms, wind_speed_percentile_10_ms, wind_speed_percentile_90_ms,
+            wind_direction_deg, wind_gust_ms,
+            precipitation_mm, precipitation_min_mm, precipitation_max_mm,
+            humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
+            feels_like_c, precipitation_type, yr_model_run_at
+         ) VALUES (
+            gen_random_uuid(), $1, $2, $3, $4,
+            $5, $6, $7, $8, $9, $10, $11, $12,
+            $13, $14, $15, $16, $17, $18, $19, $20,
+            $21, $22, $23
+         )
+         ON CONFLICT (checkpoint_id, forecast_time)
+            WHERE yr_model_run_at IS NULL
+         DO NOTHING
+         RETURNING id, checkpoint_id, forecast_time, fetched_at, source,
+                   temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
+                   wind_speed_ms, wind_speed_percentile_10_ms, wind_speed_percentile_90_ms,
+                   wind_direction_deg, wind_gust_ms,
+                   precipitation_mm, precipitation_min_mm, precipitation_max_mm,
+                   humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
+                   feels_like_c, precipitation_type, yr_model_run_at, created_at"
+    };
+
+    sqlx::query_as::<_, Forecast>(sql)
     .bind(p.checkpoint_id)
     .bind(p.forecast_time)
     .bind(p.fetched_at)
@@ -534,4 +587,33 @@ pub async fn upsert_race_from_gpx(pool: &PgPool, race: &GpxRace) -> Result<Uuid,
     tx.commit().await?;
 
     Ok(race_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_f64_to_dec_normal() {
+        let d = f64_to_dec(3.14);
+        assert!(d > Decimal::ZERO, "Normal float should produce positive Decimal");
+    }
+
+    #[test]
+    fn test_f64_to_dec_nan() {
+        let d = f64_to_dec(f64::NAN);
+        assert_eq!(d, Decimal::ZERO, "NaN should be converted to 0");
+    }
+
+    #[test]
+    fn test_f64_to_dec_infinity() {
+        let d = f64_to_dec(f64::INFINITY);
+        assert_eq!(d, Decimal::ZERO, "Infinity should be converted to 0");
+    }
+
+    #[test]
+    fn test_f64_to_dec_neg_infinity() {
+        let d = f64_to_dec(f64::NEG_INFINITY);
+        assert_eq!(d, Decimal::ZERO, "Negative infinity should be converted to 0");
+    }
 }

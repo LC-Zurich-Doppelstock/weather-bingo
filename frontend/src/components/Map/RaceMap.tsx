@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import type { LatLngBoundsExpression } from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -34,13 +34,26 @@ const DEFAULT_CENTER: [number, number] = [61.5, 14.5];
 const DEFAULT_ZOOM = 7;
 
 /**
- * Sub-component that fits the map bounds when checkpoints change.
+ * Sub-component that fits the map bounds once per race.
+ * Uses a ref to track the last set of checkpoint IDs so it only re-fits
+ * when the actual race changes, not on every render or re-fetch.
  */
 function FitBounds({ checkpoints }: { checkpoints: Checkpoint[] }) {
   const map = useMap();
+  const fittedIdsRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (checkpoints.length === 0) return;
+
+    // Build a stable fingerprint from sorted checkpoint IDs
+    const fingerprint = checkpoints
+      .map((cp) => cp.id)
+      .sort()
+      .join(",");
+
+    // Only re-fit if the set of checkpoints actually changed (new race)
+    if (fingerprint === fittedIdsRef.current) return;
+    fittedIdsRef.current = fingerprint;
 
     const bounds: LatLngBoundsExpression = checkpoints.map(
       (cp) => [cp.latitude, cp.longitude] as [number, number]

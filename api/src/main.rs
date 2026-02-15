@@ -136,10 +136,10 @@ async fn main() {
         yr_client,
     };
 
-    // CORS — expose X-Forecast-Stale so the frontend can read it
+    // CORS — read-only API, restrict methods to GET; expose X-Forecast-Stale
     let cors = CorsLayer::new()
         .allow_origin(Any)
-        .allow_methods(Any)
+        .allow_methods([axum::http::Method::GET])
         .allow_headers(Any)
         .expose_headers(["X-Forecast-Stale"
             .parse::<axum::http::HeaderName>()

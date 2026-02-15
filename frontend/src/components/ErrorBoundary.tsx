@@ -8,7 +8,11 @@ interface ErrorBoundaryProps {
 interface ErrorBoundaryState {
   hasError: boolean;
   error: Error | null;
+  retryCount: number;
 }
+
+/** Maximum number of retry attempts before disabling the button. */
+const MAX_RETRIES = 3;
 
 /**
  * React Error Boundary that catches render errors and displays
@@ -20,10 +24,10 @@ export default class ErrorBoundary extends Component<
 > {
   constructor(props: ErrorBoundaryProps) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, retryCount: 0 };
   }
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+  static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
     return { hasError: true, error };
   }
 
@@ -32,7 +36,11 @@ export default class ErrorBoundary extends Component<
   }
 
   handleRetry = (): void => {
-    this.setState({ hasError: false, error: null });
+    this.setState((prev) => ({
+      hasError: false,
+      error: null,
+      retryCount: prev.retryCount + 1,
+    }));
   };
 
   render(): ReactNode {
@@ -54,12 +62,18 @@ export default class ErrorBoundary extends Component<
               {this.state.error.message}
             </pre>
           )}
-          <button
-            onClick={this.handleRetry}
-            className="rounded-lg bg-primary px-6 py-2 font-medium text-background transition-colors hover:bg-primary-hover"
-          >
-            Try Again
-          </button>
+          {this.state.retryCount < MAX_RETRIES ? (
+            <button
+              onClick={this.handleRetry}
+              className="rounded-lg bg-primary px-6 py-2 font-medium text-background transition-colors hover:bg-primary-hover"
+            >
+              Try Again ({MAX_RETRIES - this.state.retryCount} attempts remaining)
+            </button>
+          ) : (
+            <p className="text-sm text-text-muted">
+              Maximum retries reached. Please refresh the page.
+            </p>
+          )}
         </div>
       );
     }

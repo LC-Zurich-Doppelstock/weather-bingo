@@ -142,8 +142,26 @@ pub fn parse_gpx(gpx_xml: &str) -> Result<GpxRace, GpxError> {
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                             let val = std::str::from_utf8(&attr.value).unwrap_or("");
                             match key {
-                                "lat" => wpt_lat = val.parse().unwrap_or(0.0),
-                                "lon" => wpt_lon = val.parse().unwrap_or(0.0),
+                                "lat" => {
+                                    wpt_lat = val.parse().unwrap_or_else(|e| {
+                                        tracing::warn!(
+                                            "Malformed wpt lat='{}': {}, defaulting to 0.0",
+                                            val,
+                                            e,
+                                        );
+                                        0.0
+                                    });
+                                }
+                                "lon" => {
+                                    wpt_lon = val.parse().unwrap_or_else(|e| {
+                                        tracing::warn!(
+                                            "Malformed wpt lon='{}': {}, defaulting to 0.0",
+                                            val,
+                                            e,
+                                        );
+                                        0.0
+                                    });
+                                }
                                 _ => {}
                             }
                         }
@@ -324,8 +342,26 @@ pub fn extract_track_points(gpx_xml: &str) -> Result<Vec<CoursePoint>, GpxError>
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                             let val = std::str::from_utf8(&attr.value).unwrap_or("");
                             match key {
-                                "lat" => trkpt_lat = val.parse().unwrap_or(0.0),
-                                "lon" => trkpt_lon = val.parse().unwrap_or(0.0),
+                                "lat" => {
+                                    trkpt_lat = val.parse().unwrap_or_else(|e| {
+                                        tracing::warn!(
+                                            "Malformed trkpt lat='{}': {}, defaulting to 0.0",
+                                            val,
+                                            e,
+                                        );
+                                        0.0
+                                    });
+                                }
+                                "lon" => {
+                                    trkpt_lon = val.parse().unwrap_or_else(|e| {
+                                        tracing::warn!(
+                                            "Malformed trkpt lon='{}': {}, defaulting to 0.0",
+                                            val,
+                                            e,
+                                        );
+                                        0.0
+                                    });
+                                }
                                 _ => {}
                             }
                         }

@@ -2,14 +2,23 @@ import { describe, it, expect } from "vitest";
 import type { CoursePoint } from "../../api/types";
 
 /**
- * Tests for the CoursePolyline coordinate mapping logic.
+ * Tests for the CoursePolyline coordinate mapping and rendering logic.
  * The component itself is a thin wrapper around react-leaflet's Polyline,
- * so we test the data transformation that maps CoursePoint[] to [lat, lon][].
+ * so we test the data transformation that maps CoursePoint[] to [lat, lon][]
+ * and the render guard that requires at least 2 points.
  */
 
 /** Replicate the mapping logic from CoursePolyline for unit testing. */
 function mapToPositions(points: CoursePoint[]): [number, number][] {
   return points.map((p) => [p.lat, p.lon]);
+}
+
+/**
+ * Replicate the render guard: the component returns null when fewer
+ * than 2 positions are available (a line needs at least 2 points).
+ */
+function shouldRender(points: CoursePoint[]): boolean {
+  return mapToPositions(points).length >= 2;
 }
 
 describe("CoursePolyline coordinate mapping", () => {
@@ -60,5 +69,33 @@ describe("CoursePolyline coordinate mapping", () => {
     const positions = mapToPositions(points);
     // Each position should be [lat, lon] only — no ele
     expect(positions[0]).toHaveLength(2);
+  });
+});
+
+describe("CoursePolyline render guard", () => {
+  it("should not render with zero points", () => {
+    expect(shouldRender([])).toBe(false);
+  });
+
+  it("should not render with a single point (cannot form a line)", () => {
+    expect(shouldRender([{ lat: 61.0, lon: 14.0, ele: 300 }])).toBe(false);
+  });
+
+  it("should render with two or more points", () => {
+    const points: CoursePoint[] = [
+      { lat: 61.1, lon: 14.2, ele: 500 },
+      { lat: 61.2, lon: 14.3, ele: 520 },
+    ];
+    expect(shouldRender(points)).toBe(true);
+  });
+
+  it("should render with a large number of points", () => {
+    const points: CoursePoint[] = Array.from({ length: 5000 }, (_, i) => ({
+      lat: 61.0 + i * 0.001,
+      lon: 14.0 + i * 0.001,
+      ele: 300 + i * 0.1,
+    }));
+    expect(shouldRender(points)).toBe(true);
+    expect(mapToPositions(points)).toHaveLength(5000);
   });
 });

@@ -1,5 +1,6 @@
-import { memo, useCallback, useMemo } from "react";
+import { memo, useCallback, useMemo, useRef } from "react";
 import { CircleMarker, Tooltip } from "react-leaflet";
+import type L from "leaflet";
 import type { Checkpoint } from "../../api/types";
 import { colors } from "../../styles/theme";
 
@@ -28,6 +29,8 @@ const CheckpointMarker = memo(function CheckpointMarker({
   onClick,
   onHover,
 }: CheckpointMarkerProps) {
+  const markerRef = useRef<L.CircleMarker | null>(null);
+
   const handleClick = useCallback(() => {
     onClick(checkpoint.id);
   }, [checkpoint.id, onClick]);
@@ -39,6 +42,16 @@ const CheckpointMarker = memo(function CheckpointMarker({
   const handleMouseOut = useCallback(() => {
     onHover(null);
   }, [onHover]);
+
+  const handleKeyDown = useCallback(
+    (e: L.LeafletKeyboardEvent) => {
+      if (e.originalEvent.key === "Enter" || e.originalEvent.key === " ") {
+        e.originalEvent.preventDefault();
+        onClick(checkpoint.id);
+      }
+    },
+    [checkpoint.id, onClick]
+  );
 
   const highlighted = isSelected || isHovered;
 
@@ -58,12 +71,26 @@ const CheckpointMarker = memo(function CheckpointMarker({
       click: handleClick,
       mouseover: handleMouseOver,
       mouseout: handleMouseOut,
+      keydown: handleKeyDown,
+      add: (e: L.LeafletEvent) => {
+        // Make the SVG element focusable for keyboard navigation
+        const el = (e.target as L.CircleMarker).getElement();
+        if (el) {
+          el.setAttribute("tabindex", "0");
+          el.setAttribute("role", "button");
+          el.setAttribute(
+            "aria-label",
+            `${checkpoint.name}, ${checkpoint.distance_km.toFixed(1)} km`
+          );
+        }
+      },
     }),
-    [handleClick, handleMouseOver, handleMouseOut]
+    [handleClick, handleMouseOver, handleMouseOut, handleKeyDown, checkpoint.name, checkpoint.distance_km]
   );
 
   return (
     <CircleMarker
+      ref={markerRef}
       center={[checkpoint.latitude, checkpoint.longitude]}
       radius={highlighted ? 8 : 6}
       pathOptions={pathOptions}

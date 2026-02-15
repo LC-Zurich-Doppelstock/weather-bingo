@@ -56,7 +56,13 @@ pub enum YrTimeseriesResult {
         last_modified: Option<String>,
     },
     /// Data not modified since last fetch (HTTP 304).
-    NotModified,
+    /// Carries any Expires/Last-Modified headers from the 304 response.
+    NotModified {
+        /// yr.no `Expires` header from the 304 response.
+        expires: Option<String>,
+        /// yr.no `Last-Modified` header from the 304 response.
+        last_modified: Option<String>,
+    },
 }
 
 /// Parsed forecast data from yr.no for a specific time.
@@ -162,6 +168,10 @@ struct YrPeriodDetails {
 }
 
 fn f64_to_decimal(v: f64) -> Decimal {
+    if !v.is_finite() {
+        tracing::warn!("f64_to_decimal received non-finite value {}, defaulting to 0", v);
+        return Decimal::ZERO;
+    }
     Decimal::from_str(&format!("{:.1}", v)).unwrap_or_default()
 }
 
@@ -223,9 +233,22 @@ impl YrClient {
             .await
             .map_err(|e| AppError::ExternalServiceError(format!("yr.no request failed: {}", e)))?;
 
-        // Handle 304 Not Modified
+        // Handle 304 Not Modified — extract headers before discarding the response
         if response.status() == reqwest::StatusCode::NOT_MODIFIED {
-            return Ok(YrTimeseriesResult::NotModified);
+            let expires = response
+                .headers()
+                .get("expires")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            let last_modified = response
+                .headers()
+                .get("last-modified")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            return Ok(YrTimeseriesResult::NotModified {
+                expires,
+                last_modified,
+            });
         }
 
         if !response.status().is_success() {
@@ -298,18 +321,39 @@ pub fn extract_forecasts_at_times(
         ));
     }
 
+    // Pre-parse all timeseries timestamps once (avoiding redundant RFC3339 parsing per query).
+    // Entries with unparseable timestamps are skipped (logged) rather than defaulting to epoch 0.
+    let parsed_entries: Vec<(i64, &YrTimeseries)> = timeseries
+        .iter()
+        .filter_map(|ts| {
+            match chrono::DateTime::parse_from_rfc3339(&ts.time) {
+                Ok(dt) => Some((dt.timestamp(), ts)),
+                Err(e) => {
+                    tracing::warn!(
+                        "Skipping yr.no timeseries entry with unparseable time '{}': {}",
+                        ts.time,
+                        e,
+                    );
+                    None
+                }
+            }
+        })
+        .collect();
+
+    if parsed_entries.is_empty() {
+        return Err(AppError::ExternalServiceError(
+            "yr.no timeseries has no entries with valid timestamps".to_string(),
+        ));
+    }
+
     let mut results = Vec::with_capacity(forecast_times.len());
 
     for &ft in forecast_times {
         let target_ts = ft.timestamp();
-        let closest = timeseries
+        let closest = parsed_entries
             .iter()
-            .min_by_key(|ts| {
-                let ts_time = chrono::DateTime::parse_from_rfc3339(&ts.time)
-                    .map(|dt| dt.timestamp())
-                    .unwrap_or(0);
-                (ts_time - target_ts).unsigned_abs()
-            })
+            .min_by_key(|(ts_time, _)| (*ts_time - target_ts).unsigned_abs())
+            .map(|(_, entry)| *entry)
             .ok_or_else(|| {
                 AppError::ExternalServiceError("yr.no returned empty timeseries".to_string())
             })?;
@@ -486,6 +530,24 @@ mod tests {
     fn test_f64_to_decimal() {
         let d = f64_to_decimal(-4.7);
         assert_eq!(d, Decimal::from_str("-4.7").unwrap());
+    }
+
+    #[test]
+    fn test_f64_to_decimal_nan() {
+        let d = f64_to_decimal(f64::NAN);
+        assert_eq!(d, Decimal::ZERO, "NaN should be converted to 0");
+    }
+
+    #[test]
+    fn test_f64_to_decimal_infinity() {
+        let d = f64_to_decimal(f64::INFINITY);
+        assert_eq!(d, Decimal::ZERO, "Infinity should be converted to 0");
+    }
+
+    #[test]
+    fn test_f64_to_decimal_neg_infinity() {
+        let d = f64_to_decimal(f64::NEG_INFINITY);
+        assert_eq!(d, Decimal::ZERO, "Negative infinity should be converted to 0");
     }
 
     #[test]

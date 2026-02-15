@@ -230,9 +230,30 @@ async fn ensure_yr_cache_fresh(
     let existing = queries::get_yr_cached_response_any(pool, checkpoint_id).await?;
     let if_modified_since = existing.as_ref().and_then(|c| c.last_modified.as_deref());
 
-    let lat = checkpoint.latitude.to_f64().unwrap_or(0.0);
-    let lon = checkpoint.longitude.to_f64().unwrap_or(0.0);
-    let alt = checkpoint.elevation_m.to_f64().unwrap_or(0.0);
+    let lat = checkpoint.latitude.to_f64().unwrap_or_else(|| {
+        tracing::warn!(
+            "Checkpoint {} has non-representable latitude {:?}, defaulting to 0.0",
+            checkpoint.id,
+            checkpoint.latitude,
+        );
+        0.0
+    });
+    let lon = checkpoint.longitude.to_f64().unwrap_or_else(|| {
+        tracing::warn!(
+            "Checkpoint {} has non-representable longitude {:?}, defaulting to 0.0",
+            checkpoint.id,
+            checkpoint.longitude,
+        );
+        0.0
+    });
+    let alt = checkpoint.elevation_m.to_f64().unwrap_or_else(|| {
+        tracing::warn!(
+            "Checkpoint {} has non-representable elevation {:?}, defaulting to 0.0",
+            checkpoint.id,
+            checkpoint.elevation_m,
+        );
+        0.0
+    });
 
     match yr_client
         .fetch_timeseries(lat, lon, alt, if_modified_since)
@@ -263,11 +284,24 @@ async fn ensure_yr_cache_fresh(
 
             Ok(raw_json)
         }
-        YrTimeseriesResult::NotModified => {
+        YrTimeseriesResult::NotModified {
+            expires,
+            last_modified,
+        } => {
             if let Some(cached) = existing {
-                // Just bump expires_at — don't re-write the full JSON blob
-                let new_expires = Utc::now() + Duration::hours(1);
-                queries::update_yr_cache_expiry(pool, checkpoint_id, new_expires).await?;
+                // Use the Expires header from the 304 response if available,
+                // otherwise fall back to now + 1h.
+                let new_expires = expires
+                    .as_deref()
+                    .map(parse_expires_header)
+                    .unwrap_or_else(|| Utc::now() + Duration::hours(1));
+                queries::update_yr_cache_expiry_and_last_modified(
+                    pool,
+                    checkpoint_id,
+                    new_expires,
+                    last_modified.as_deref(),
+                )
+                .await?;
                 Ok(cached.raw_response)
             } else {
                 Err(AppError::ExternalServiceError(
@@ -284,9 +318,30 @@ fn build_single_insert_params(
     parsed: &YrParsedForecast,
     fetched_at: DateTime<Utc>,
 ) -> InsertForecastParams {
-    let temp_c = parsed.temperature_c.to_f64().unwrap_or(0.0);
-    let wind_ms = parsed.wind_speed_ms.to_f64().unwrap_or(0.0);
-    let precip_mm = parsed.precipitation_mm.to_f64().unwrap_or(0.0);
+    let temp_c = parsed.temperature_c.to_f64().unwrap_or_else(|| {
+        tracing::warn!(
+            "Forecast at {} has non-representable temperature_c {:?}, defaulting to 0.0",
+            parsed.forecast_time,
+            parsed.temperature_c,
+        );
+        0.0
+    });
+    let wind_ms = parsed.wind_speed_ms.to_f64().unwrap_or_else(|| {
+        tracing::warn!(
+            "Forecast at {} has non-representable wind_speed_ms {:?}, defaulting to 0.0",
+            parsed.forecast_time,
+            parsed.wind_speed_ms,
+        );
+        0.0
+    });
+    let precip_mm = parsed.precipitation_mm.to_f64().unwrap_or_else(|| {
+        tracing::warn!(
+            "Forecast at {} has non-representable precipitation_mm {:?}, defaulting to 0.0",
+            parsed.forecast_time,
+            parsed.precipitation_mm,
+        );
+        0.0
+    });
 
     let feels_like = calculate_feels_like(temp_c, wind_ms);
     let precip_type = infer_precipitation_type(&parsed.symbol_code, temp_c, precip_mm);
@@ -434,6 +489,8 @@ pub async fn resolve_race_forecasts(
     let cached_forecasts = queries::get_latest_forecasts_batch(pool, &pairs).await?;
 
     let mut results: Vec<Option<ResolvedForecast>> = vec![None; n];
+    // Collect insert params for batch DB write (issue #7: avoid sequential inserts)
+    let mut insert_params: Vec<InsertForecastParams> = Vec::new();
 
     for (idx, fetch_result) in fetch_results.into_iter().enumerate() {
         match fetch_result {
@@ -445,13 +502,13 @@ pub async fn resolve_race_forecasts(
 
                 match maybe_parsed {
                     Some(ref forecast_data) => {
-                        // Write to forecasts table for history (ON CONFLICT DO NOTHING)
+                        // Collect params for concurrent insert below
                         let params = build_single_insert_params(
                             checkpoints[idx].checkpoint.id,
                             forecast_data,
                             Utc::now(),
                         );
-                        let _ = queries::insert_forecast(pool, params).await?;
+                        insert_params.push(params);
 
                         // Mark for batch re-query below
                         results[idx] = None; // will be filled by batch re-query
@@ -485,6 +542,16 @@ pub async fn resolve_race_forecasts(
                 }
             }
         }
+    }
+
+    // ── Step 2b: Batch-insert all forecast params concurrently ──
+    let insert_futures: Vec<_> = insert_params
+        .into_iter()
+        .map(|params| queries::insert_forecast(pool, params))
+        .collect();
+    let insert_results = futures::future::join_all(insert_futures).await;
+    for result in insert_results {
+        let _ = result?;
     }
 
     // ── Step 3: Batch re-query DB for canonical Forecast rows ──

@@ -401,15 +401,16 @@ pub async fn get_race_forecast(
     Path(race_id): Path<Uuid>,
     Query(params): Query<RaceForecastQuery>,
 ) -> Result<(HeaderMap, Json<RaceForecastResponse>), AppError> {
-    // Validate target_duration_hours
-    if params.target_duration_hours <= 0.0 || params.target_duration_hours > 72.0 {
-        return Err(AppError::BadRequest(
-            "target_duration_hours must be between 0 (exclusive) and 72".to_string(),
-        ));
-    }
+    // Validate target_duration_hours — check is_finite() first because NaN
+    // passes range comparisons (NaN <= 0.0 is false, NaN > 72.0 is also false).
     if !params.target_duration_hours.is_finite() {
         return Err(AppError::BadRequest(
             "target_duration_hours must be a finite number".to_string(),
+        ));
+    }
+    if params.target_duration_hours <= 0.0 || params.target_duration_hours > 72.0 {
+        return Err(AppError::BadRequest(
+            "target_duration_hours must be between 0 (exclusive) and 72".to_string(),
         ));
     }
 

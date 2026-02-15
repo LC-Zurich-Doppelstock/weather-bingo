@@ -51,6 +51,11 @@ export default function RaceSelector({
       className="rounded border border-border bg-surface-alt px-3 py-1.5 text-sm text-text-primary focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
       aria-label="Select a race"
     >
+      {!selectedRaceId && (
+        <option value="" disabled>
+          Select a race...
+        </option>
+      )}
       {races.map((race) => (
         <option key={race.id} value={race.id}>
           {race.name} {race.year}

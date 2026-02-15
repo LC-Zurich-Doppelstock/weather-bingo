@@ -33,7 +33,10 @@ describe("ErrorBoundary", () => {
     expect(screen.getByText("Something went wrong")).toBeInTheDocument();
     expect(screen.getByText("Test error message")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toBeInTheDocument();
-    expect(screen.getByText("Try Again")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Try Again/ })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/3 attempts remaining/)).toBeInTheDocument();
 
     consoleSpy.mockRestore();
   });
@@ -54,11 +57,42 @@ describe("ErrorBoundary", () => {
 
     // Click Try Again - this resets the error state, but the child
     // will throw again since shouldThrow is still true
-    await user.click(screen.getByText("Try Again"));
+    await user.click(screen.getByRole("button", { name: /Try Again/ }));
 
     // After retry, React will try to render again - since component
     // still throws, error boundary catches it again
     expect(screen.getByText("Something went wrong")).toBeInTheDocument();
+    // Retry count should have decremented
+    expect(screen.getByText(/2 attempts remaining/)).toBeInTheDocument();
+
+    consoleSpy.mockRestore();
+  });
+
+  it("disables retry button after MAX_RETRIES exhausted", async () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const user = userEvent.setup();
+
+    render(
+      <ErrorBoundary>
+        <ThrowingComponent shouldThrow={true} />
+      </ErrorBoundary>
+    );
+
+    // Start with 3 attempts
+    expect(screen.getByRole("button")).toHaveTextContent(/3 attempts remaining/);
+
+    // Use up all 3 retries
+    await user.click(screen.getByRole("button", { name: /Try Again/ }));
+    expect(screen.getByRole("button")).toHaveTextContent(/2 attempts remaining/);
+
+    await user.click(screen.getByRole("button", { name: /Try Again/ }));
+    expect(screen.getByRole("button")).toHaveTextContent(/1 attempts remaining/);
+
+    await user.click(screen.getByRole("button", { name: /Try Again/ }));
+
+    // Button should now be gone and max retries message shown
+    expect(screen.queryByRole("button", { name: /Try Again/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/Maximum retries reached/)).toBeInTheDocument();
 
     consoleSpy.mockRestore();
   });

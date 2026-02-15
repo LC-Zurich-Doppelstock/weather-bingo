@@ -54,10 +54,12 @@ export function formatTimeWithZone(isoString: string): string {
   });
 }
 
-/** Convert wind direction in degrees to compass label. */
+/** Convert wind direction in degrees to compass label. Normalizes negative and >360 values. */
 export function windDirectionLabel(degrees: number): string {
   const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-  const index = Math.round(degrees / 45) % 8;
+  // Normalize to 0–360 range (handles negative and >360 values)
+  const normalized = ((degrees % 360) + 360) % 360;
+  const index = Math.round(normalized / 45) % 8;
   return directions[index] ?? "N";
 }
 

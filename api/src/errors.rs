@@ -33,8 +33,20 @@ impl IntoResponse for AppError {
         let (status, message) = match self {
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
-            AppError::ExternalServiceError(msg) => (StatusCode::BAD_GATEWAY, msg),
-            AppError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            AppError::ExternalServiceError(msg) => {
+                tracing::error!("External service error: {}", msg);
+                (
+                    StatusCode::BAD_GATEWAY,
+                    "External service unavailable".to_string(),
+                )
+            }
+            AppError::InternalError(msg) => {
+                tracing::error!("Internal error: {}", msg);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
+            }
             AppError::DatabaseError(err) => {
                 tracing::error!("Database error: {:?}", err);
                 (

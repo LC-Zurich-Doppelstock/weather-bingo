@@ -29,9 +29,9 @@ Frontend (React/TS)  →  REST API (Rust/Axum)  →  PostgreSQL
 
 ## Key Concepts
 
-**Cache-first forecasts** — the API serves from the database. If data is missing or stale (>1 min), it fetches fresh data from yr.no and stores it. Old forecasts are never overwritten — every fetch creates a new historical record.
+**Cache-first forecasts** — the API serves from a local yr.no response cache. Freshness is controlled by yr.no's `Expires` header — when the cache expires, the API fetches fresh data and stores it. Old forecasts are never overwritten — every fetch creates a new historical record.
 
-**Pacing-aware** — forecasts are calculated for when *you* will be at each point, not just a fixed time. Set a target duration and the app computes your expected pass-through time at each checkpoint using even pacing.
+**Pacing-aware** — forecasts are calculated for when *you* will be at each point, not just a fixed time. Set a target duration and the app computes your expected pass-through time at each checkpoint using elevation-adjusted pacing (with even pacing as fallback for flat courses).
 
 **Race-agnostic** — the data model supports multiple races. Vasaloppet 2026 is the first, but adding more is just data.
 

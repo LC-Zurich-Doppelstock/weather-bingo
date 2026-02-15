@@ -21,6 +21,21 @@ interface SidebarProps {
   onCheckpointHover: (id: string | null) => void;
 }
 
+/** Sticky back-navigation button at the top of the detail view. */
+function BackToOverviewButton({ onClick }: { onClick: () => void }) {
+  return (
+    <div className="sticky top-0 z-10 border-b border-border bg-surface p-3">
+      <button
+        onClick={onClick}
+        className="text-sm text-text-secondary hover:text-primary transition-colors"
+        aria-label="Back to course overview"
+      >
+        &larr; Course Overview
+      </button>
+    </div>
+  );
+}
+
 /**
  * Sidebar container that switches between checkpoint detail view
  * and course overview based on selection state.
@@ -76,15 +91,7 @@ export default function Sidebar({
     if (!passTime && raceForecastLoading) {
       return (
         <div className="h-full overflow-y-auto" role="region" aria-label={`Weather details for ${selectedCheckpoint.name}`}>
-          <div className="sticky top-0 z-10 border-b border-border bg-surface p-3">
-            <button
-              onClick={onClearSelection}
-              className="text-sm text-text-secondary hover:text-primary transition-colors"
-              aria-label="Back to course overview"
-            >
-              &larr; Course Overview
-            </button>
-          </div>
+          <BackToOverviewButton onClick={onClearSelection} />
           <div className="space-y-4 p-4" aria-busy="true">
             <div className="border-b border-border pb-3">
               <h2 className="text-lg font-bold text-text-primary">
@@ -111,15 +118,7 @@ export default function Sidebar({
     if (!passTime && raceForecastError) {
       return (
         <div className="h-full overflow-y-auto" role="region" aria-label={`Weather details for ${selectedCheckpoint.name}`}>
-          <div className="sticky top-0 z-10 border-b border-border bg-surface p-3">
-            <button
-              onClick={onClearSelection}
-              className="text-sm text-text-secondary hover:text-primary transition-colors"
-              aria-label="Back to course overview"
-            >
-              &larr; Course Overview
-            </button>
-          </div>
+          <BackToOverviewButton onClick={onClearSelection} />
           <div className="p-4">
             <p className="text-error">Failed to load forecast data.</p>
             <button
@@ -137,15 +136,7 @@ export default function Sidebar({
     if (forecastError && !forecastLoading) {
       return (
         <div className="h-full overflow-y-auto" role="region" aria-label={`Weather details for ${selectedCheckpoint.name}`}>
-          <div className="sticky top-0 z-10 border-b border-border bg-surface p-3">
-            <button
-              onClick={onClearSelection}
-              className="text-sm text-text-secondary hover:text-primary transition-colors"
-              aria-label="Back to course overview"
-            >
-              &larr; Course Overview
-            </button>
-          </div>
+          <BackToOverviewButton onClick={onClearSelection} />
           <div className="p-4">
             <p className="text-error">Failed to load forecast data.</p>
             <button
@@ -162,15 +153,7 @@ export default function Sidebar({
     if (passTime) {
       return (
         <div className="h-full overflow-y-auto" role="region" aria-label={`Weather details for ${selectedCheckpoint.name}`}>
-          <div className="sticky top-0 z-10 border-b border-border bg-surface p-3">
-            <button
-              onClick={onClearSelection}
-              className="text-sm text-text-secondary hover:text-primary transition-colors"
-              aria-label="Back to course overview"
-            >
-              &larr; Course Overview
-            </button>
-          </div>
+          <BackToOverviewButton onClick={onClearSelection} />
           <CheckpointDetail
             checkpoint={selectedCheckpoint}
             passTime={passTime}
@@ -185,15 +168,7 @@ export default function Sidebar({
     // the forecast horizon or race forecast has no entry for this checkpoint
     return (
       <div className="h-full overflow-y-auto" role="region" aria-label={`Weather details for ${selectedCheckpoint.name}`}>
-        <div className="sticky top-0 z-10 border-b border-border bg-surface p-3">
-          <button
-            onClick={onClearSelection}
-            className="text-sm text-text-secondary hover:text-primary transition-colors"
-            aria-label="Back to course overview"
-          >
-            &larr; Course Overview
-          </button>
-        </div>
+        <BackToOverviewButton onClick={onClearSelection} />
         <div className="p-4">
           <h2 className="text-lg font-bold text-text-primary">
             {selectedCheckpoint.name}

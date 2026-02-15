@@ -105,7 +105,9 @@ The UI uses a dark theme with warm charcoal neutrals:
 |------|-----|-------|
 | Background | `#0D0D0C` | App background |
 | Surface | `#171614` | Sidebar, cards |
+| Surface Alt | `#1F1E1C` | Hover states, input fields, map overlays |
 | Primary | `#2DD4A8` | Buttons, active states |
+| Primary Hover | `#34EBB9` | Button hover, focus rings |
 | Secondary | `#14B8A6` | Secondary actions |
 | Accent Warm | `#F5A623` | Highlights, temperature |
 | Accent Cool | `#7C8CF5` | Wind, info states |
@@ -113,7 +115,22 @@ The UI uses a dark theme with warm charcoal neutrals:
 | Text Primary | `#F0EEEB` | Main text |
 | Text Secondary | `#9E9A93` | Labels, captions |
 | Text Muted | `#8A8580` | Placeholders, disabled text (WCAG AA 4.5:1) |
+| Border | `#2C2A27` | Dividers, card borders, subtle lines |
 | Error | `#EF4444` | Error states |
+| Success | `#2DD4A8` | Success feedback (same as Primary) |
+
+### Chart Colours
+
+| # | Hex | Name | Usage |
+|---|-----|------|-------|
+| 1 | `#2DD4A8` | Emerald mint | Temperature |
+| 2 | `#14B8A6` | Teal | Feels-like temperature |
+| 3 | `#7C8CF5` | Lavender blue | Wind speed |
+| 4 | `#F5A623` | Golden amber | Precipitation |
+| 5 | `#34EBB9` | Bright mint | Humidity |
+| 6 | `#5A7A6E` | Faded green | Cloud cover |
+
+Uncertainty ranges (percentile bands) are rendered at **15% opacity** of the same colour.
 
 ## Key Conventions
 

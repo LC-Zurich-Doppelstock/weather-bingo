@@ -44,15 +44,23 @@ function App() {
     return { minDuration: Math.max(min, 1), maxDuration: max, defaultDuration: def };
   }, [race?.distance_km]);
 
-  // Set default target duration when race loads (or changes)
+  // Clear checkpoint selection and reset duration when race changes
   useEffect(() => {
+    setSelectedCheckpointId(null);
     setTargetDuration(defaultDuration);
   }, [defaultDuration]);
 
   const effectiveDuration = targetDuration ?? defaultDuration;
 
-  // Clamp target duration when race changes
+  // Clamp target duration when race changes and sync back to state
   const clampedDuration = Math.min(Math.max(effectiveDuration, minDuration), maxDuration);
+
+  // Sync clamped value back to state so the slider stays consistent
+  useEffect(() => {
+    if (clampedDuration !== effectiveDuration) {
+      setTargetDuration(clampedDuration);
+    }
+  }, [clampedDuration, effectiveDuration]);
 
   // Debounce the clamped duration to avoid hammering the API while the user drags the slider.
   // The slider still moves instantly (controlled by clampedDuration), but API fetches wait

@@ -22,6 +22,13 @@ const tooltipStyle = {
   fontSize: "12px",
 } as const;
 
+const tickStyle = { fill: colors.textMuted, fontSize: 10 } as const;
+const axisLineStyle = { stroke: colors.border } as const;
+const tempDotStyle = { fill: chartColors.temperature, r: 3 } as const;
+const tempActiveDot = { r: 5 } as const;
+const windDotStyle = { fill: chartColors.wind, r: 2 } as const;
+const windActiveDot = { r: 4 } as const;
+
 interface MiniTimelineProps {
   /** Checkpoint ID to show timeline for. */
   checkpointId: string;
@@ -54,7 +61,6 @@ interface TimelineDataPoint {
   windP90: number | null;
   windRange: [number, number] | null;
   windDirection: string | null;
-  isPassTime: boolean;
 }
 
 /**
@@ -116,7 +122,6 @@ export default function MiniTimeline({
       windDirection: w?.wind_direction_deg != null
         ? windDirectionLabel(w.wind_direction_deg)
         : null,
-      isPassTime: i === 2, // Center slot is the pass time
     };
   });
 
@@ -140,13 +145,13 @@ export default function MiniTimeline({
         >
           <XAxis
             dataKey="timeLabel"
-            tick={{ fill: colors.textMuted, fontSize: 10 }}
-            axisLine={{ stroke: colors.border }}
+            tick={tickStyle}
+            axisLine={axisLineStyle}
             tickLine={false}
           />
           <YAxis
             yAxisId="temp"
-            tick={{ fill: colors.textMuted, fontSize: 10 }}
+            tick={tickStyle}
             tickFormatter={(v: number) => formatTemp(v)}
             axisLine={false}
             tickLine={false}
@@ -155,7 +160,7 @@ export default function MiniTimeline({
           <YAxis
             yAxisId="precip"
             orientation="right"
-            tick={{ fill: colors.textMuted, fontSize: 10 }}
+            tick={tickStyle}
             tickFormatter={(v: number) => formatPrecip(v)}
             axisLine={false}
             tickLine={false}
@@ -165,7 +170,7 @@ export default function MiniTimeline({
           <YAxis
             yAxisId="wind"
             orientation="right"
-            tick={{ fill: colors.textMuted, fontSize: 10 }}
+            tick={tickStyle}
             tickFormatter={(v: number) => formatWind(v)}
             axisLine={false}
             tickLine={false}
@@ -233,8 +238,8 @@ export default function MiniTimeline({
             dataKey="temperature"
             stroke={chartColors.temperature}
             strokeWidth={2}
-            dot={{ fill: chartColors.temperature, r: 3 }}
-            activeDot={{ r: 5 }}
+            dot={tempDotStyle}
+            activeDot={tempActiveDot}
             name="Temperature"
             connectNulls
           />
@@ -260,8 +265,8 @@ export default function MiniTimeline({
             stroke={chartColors.wind}
             strokeWidth={1.5}
             strokeDasharray="4 2"
-            dot={{ fill: chartColors.wind, r: 2 }}
-            activeDot={{ r: 4 }}
+            dot={windDotStyle}
+            activeDot={windActiveDot}
             name="Wind"
             connectNulls
           />
