@@ -19,10 +19,16 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y ca-certificates libpq5 && rm -rf /var/lib/apt/lists/*
 
+# Run as non-root user for security
+RUN adduser --disabled-password --gecos '' appuser
+
 WORKDIR /app
 COPY --from=builder /app/target/release/weather-bingo-api .
 COPY api/migrations ./migrations
 COPY data/ ./data/
+
+RUN chown -R appuser:appuser /app
+USER appuser
 
 ENV PORT=8080
 EXPOSE 8080

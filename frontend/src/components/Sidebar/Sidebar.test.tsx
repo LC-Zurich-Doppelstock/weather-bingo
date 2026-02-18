@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import Sidebar from "./Sidebar";
-import type { Checkpoint, Race } from "../../api/types";
+import type { Checkpoint, Race, RaceForecastResponse, ForecastResponse } from "../../api/types";
 
 const mockRace: Race = {
   id: "race-1",
@@ -36,11 +36,12 @@ const mockCheckpoints: Checkpoint[] = [
   },
 ];
 
-const mockRaceForecast = {
+const mockRaceForecast: RaceForecastResponse = {
   race_id: "race-1",
   race_name: "Vasaloppet",
   target_duration_hours: 8,
   yr_model_run_at: "2026-02-28T06:00:00Z",
+  forecast_horizon: "2026-03-09T12:00:00Z",
   checkpoints: [
     {
       checkpoint_id: "cp-1",
@@ -85,7 +86,7 @@ const mockRaceForecast = {
   ],
 };
 
-const mockForecast = {
+const mockForecast: ForecastResponse = {
   checkpoint_id: "cp-1",
   checkpoint_name: "Salen",
   forecast_time: "2026-03-01T07:00:00Z",
@@ -94,6 +95,7 @@ const mockForecast = {
   yr_model_run_at: "2026-02-28T06:00:00Z",
   source: "yr.no",
   stale: false,
+  forecast_horizon: "2026-03-09T12:00:00Z",
   weather: {
     temperature_c: -5,
     temperature_percentile_10_c: -8,

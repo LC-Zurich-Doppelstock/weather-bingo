@@ -49,7 +49,7 @@ function App() {
   useEffect(() => {
     setSelectedCheckpointId(null);
     setTargetDuration(defaultDuration);
-  }, [defaultDuration]);
+  }, [selectedRaceId, defaultDuration]);
 
   const effectiveDuration = targetDuration ?? defaultDuration;
 

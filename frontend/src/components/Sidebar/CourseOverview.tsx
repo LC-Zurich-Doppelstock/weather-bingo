@@ -35,6 +35,8 @@ interface CourseOverviewProps {
   checkpoints: Checkpoint[];
   /** Whether data is loading. */
   isLoading: boolean;
+  /** Whether forecast data is stale (yr.no was unreachable). */
+  stale: boolean;
   /** Currently hovered checkpoint ID (from map or chart). */
   hoveredCheckpointId: string | null;
   /** Callback when a checkpoint is hovered/unhovered on the chart. */
@@ -66,6 +68,7 @@ const CourseOverview = memo(function CourseOverview({
   raceForecast,
   checkpoints,
   isLoading,
+  stale,
   hoveredCheckpointId,
   onCheckpointHover,
 }: CourseOverviewProps) {
@@ -224,6 +227,12 @@ const CourseOverview = memo(function CourseOverview({
         <p className="text-xs text-text-muted">
           Model run: {formatTimeWithZone(raceForecast.yr_model_run_at)}
         </p>
+      )}
+
+      {stale && (
+        <div className="rounded-md bg-accent-warm/10 px-3 py-2 text-xs text-accent-warm">
+          Forecast data may be outdated — yr.no was unreachable during the last refresh.
+        </div>
       )}
 
       {hasAnyUnavailable && !allUnavailable && (

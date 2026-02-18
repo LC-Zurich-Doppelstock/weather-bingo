@@ -54,11 +54,14 @@ export default function Sidebar({
 
   // Always fetch race forecast — we need expected_time for checkpoint detail view too
   const {
-    data: raceForecast,
+    data: raceForecastResult,
     isLoading: raceForecastLoading,
     isError: raceForecastError,
     refetch: refetchRaceForecast,
   } = useRaceForecast(race?.id ?? null, targetDurationHours);
+
+  const raceForecast = raceForecastResult?.data ?? null;
+  const raceForecastStale = raceForecastResult?.stale ?? false;
 
   // Look up expected_time from the race forecast response (server-computed pacing)
   const passTime = useMemo(() => {
@@ -200,9 +203,10 @@ export default function Sidebar({
   return (
     <div className="h-full overflow-y-auto" role="region" aria-label="Course weather overview">
       <CourseOverview
-        raceForecast={raceForecast ?? null}
+        raceForecast={raceForecast}
         checkpoints={checkpoints}
         isLoading={raceForecastLoading}
+        stale={raceForecastStale}
         hoveredCheckpointId={hoveredCheckpointId}
         onCheckpointHover={onCheckpointHover}
       />

@@ -101,9 +101,9 @@ describe("CourseOverview", () => {
         raceForecast={null}
         checkpoints={mockCheckpoints}
         isLoading={true}
+        stale={false}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
-
       />
     );
     expect(screen.getByText("Weather Along the Course")).toBeInTheDocument();
@@ -127,6 +127,7 @@ describe("CourseOverview", () => {
         raceForecast={allUnavailable}
         checkpoints={mockCheckpoints}
         isLoading={false}
+        stale={false}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
       />
@@ -146,9 +147,9 @@ describe("CourseOverview", () => {
         raceForecast={mockRaceForecast}
         checkpoints={mockCheckpoints}
         isLoading={false}
+        stale={false}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
-
       />
     );
     expect(screen.getByText("Weather Along the Course")).toBeInTheDocument();
@@ -178,9 +179,9 @@ describe("CourseOverview", () => {
         raceForecast={partial}
         checkpoints={mockCheckpoints}
         isLoading={false}
+        stale={false}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
-
       />
     );
     expect(
@@ -194,9 +195,9 @@ describe("CourseOverview", () => {
         raceForecast={null}
         checkpoints={mockCheckpoints}
         isLoading={false}
+        stale={false}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
-
       />
     );
     expect(container.innerHTML).toBe("");
@@ -213,9 +214,9 @@ describe("CourseOverview", () => {
         raceForecast={emptyForecast}
         checkpoints={[]}
         isLoading={false}
+        stale={false}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
-
       />
     );
     expect(screen.getByText("No checkpoints available")).toBeInTheDocument();

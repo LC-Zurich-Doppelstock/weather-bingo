@@ -5,7 +5,9 @@ import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import MiniTimeline from "./MiniTimeline";
 
-const mockForecast = (time: string, tempC: number) => ({
+import type { ForecastResponse } from "../../api/types";
+
+const mockForecast = (time: string, tempC: number): ForecastResponse => ({
   checkpoint_id: "cp-1",
   checkpoint_name: "Salen",
   forecast_time: time,
@@ -14,6 +16,7 @@ const mockForecast = (time: string, tempC: number) => ({
   yr_model_run_at: "2026-02-28T06:00:00Z",
   source: "yr.no",
   stale: false,
+  forecast_horizon: "2026-03-09T12:00:00Z",
   weather: {
     temperature_c: tempC,
     temperature_percentile_10_c: tempC - 3,
