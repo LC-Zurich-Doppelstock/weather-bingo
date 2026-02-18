@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+# GitHub Actions pull_request event checks out the merge commit by default,
+# so CI always tests the hypothetical merge with the target branch.
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -75,3 +78,17 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  auto-merge:
+    name: Auto-merge PR
+    if: github.event_name == 'pull_request'
+    needs: [api, frontend]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Enable auto-merge
+        run: gh pr merge ${{ github.event.pull_request.number }} --auto --squash --repo ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
