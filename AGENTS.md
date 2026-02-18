@@ -129,6 +129,7 @@ The UI uses a dark theme with warm charcoal neutrals:
 | 4 | `#F5A623` | Golden amber | Precipitation |
 | 5 | `#34EBB9` | Bright mint | Humidity |
 | 6 | `#5A7A6E` | Faded green | Cloud cover |
+| 7 | `#D4687A` | Dusty rose | Elevation profile |
 
 Uncertainty ranges (percentile bands) are rendered at **15% opacity** of the same colour.
 
@@ -140,3 +141,9 @@ Uncertainty ranges (percentile bands) are rendered at **15% opacity** of the sam
 - User-Agent for yr.no: `WeatherBingo/0.1 github.com/LC-Zurich-Doppelstock/weather-bingo`
 - HTTP timeout for yr.no: 30 seconds.
 - Docker DB credentials: user=`wb`, password=`wb_dev`, database=`weather_bingo`.
+
+### UI Patterns
+
+- **Collapsible sections:** The `ElevationProfile` component implements a collapsible pattern using a header button with chevron icon, toggling `max-h-0 overflow-hidden` / `max-h-[200px]` with `transition-all duration-200`. Reuse this pattern for any future collapsible sections.
+- **Elevation Profile:** `components/ElevationProfile/ElevationProfile.tsx` — Recharts AreaChart below the map, desktop-only (`hidden lg:block`), collapsible, bidirectional hover sync via `hoveredCheckpointId` pattern.
+- **Geo utilities:** `utils/geo.ts` provides `haversineDistance()` and `computeElevationProfile()` for computing cumulative distance along a GPS track.

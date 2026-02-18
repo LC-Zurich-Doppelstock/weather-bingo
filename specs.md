@@ -430,6 +430,34 @@ When the full course is selected:
 - When a map checkpoint is hovered, a dashed accent-rose (`#D4687A`) reference line is drawn at that checkpoint's distance on all charts.
 - Displays the yr.no weather model run time (`yr_model_run_at`) below the charts.
 
+### 5.5.1 Elevation Profile (Below Map)
+
+A collapsible elevation profile chart positioned below the map on desktop:
+
+```
+┌──────────────────────────────────┐
+│  ▾ ELEVATION PROFILE             │
+├──────────────────────────────────┤
+│  m  Salen   Mångsbod.   Mora    │
+│  500│  ╱╲       ╱╲              │
+│  400│╱    ╲___╱    ╲____╱╲___   │
+│  300│                        ╲  │
+│  └──────────────────────────────│
+│  0km    20    40    60    90km   │
+└──────────────────────────────────┘
+```
+
+- **X-axis:** cumulative distance (km) computed client-side from the full GPS track via Haversine.
+- **Y-axis:** elevation (m) from the GPS track `ele` field.
+- **Fill:** Accent Rose (`#D4687A`) area fill at 15% opacity.
+- **Checkpoint markers:** Vertical dashed lines at each checkpoint's `distance_km`, with short name labels above.
+- **Bidirectional hover sync:** Participates in the `hoveredCheckpointId` / `onCheckpointHover` pattern. Hovering the chart highlights the nearest checkpoint on the map and sidebar charts (and vice versa).
+- **Selected checkpoint:** Shown as a solid accent-rose reference line at 70% opacity.
+- **Collapsible:** Header bar with chevron toggle; `max-h-0 overflow-hidden` / visible state with CSS transition.
+- **Desktop only:** Hidden on mobile via `hidden lg:block`. Only rendered at `lg` (1024px+) breakpoint.
+- **Downsampled:** GPS tracks are downsampled to ~500 points max for chart performance.
+- **Geo utilities:** `utils/geo.ts` provides `haversineDistance()` and `computeElevationProfile()` for distance computation.
+
 ### 5.6 Colour Scheme
 
 The UI colour palette will be derived from a user-provided reference image. Colours will be extracted and mapped to a modern, sleek design system:
@@ -466,6 +494,7 @@ For weather data visualisation, the following ordered set is used:
 | 4  | `#F5A623`   | Golden amber     | Precipitation                  |
 | 5  | `#34EBB9`   | Bright mint      | Humidity                       |
 | 6  | `#5A7A6E`   | Faded green      | Cloud cover                    |
+| 7  | `#D4687A`   | Dusty rose       | Elevation profile              |
 
 Uncertainty ranges (percentile bands) are rendered as the same colour at **15% opacity**.
 
@@ -677,6 +706,8 @@ weather-bingo/
 │   │   │   │   ├── RaceMap.tsx
 │   │   │   │   ├── CoursePolyline.tsx
 │   │   │   │   └── CheckpointMarker.tsx
+│   │   │   ├── ElevationProfile/
+│   │   │   │   └── ElevationProfile.tsx
 │   │   │   ├── Sidebar/
 │   │   │   │   ├── Sidebar.tsx
 │   │   │   │   ├── CheckpointDetail.tsx
@@ -693,9 +724,11 @@ weather-bingo/
 │   │   │   ├── useRace.ts
 │   │   │   ├── useForecast.ts
 │   │   │   └── useDebouncedValue.ts
-│   │   ├── utils/              # Helpers (formatting)
+│   │   ├── utils/              # Helpers (formatting, geo)
 │   │   │   ├── formatting.ts
-│   │   │   └── formatting.test.ts
+│   │   │   ├── formatting.test.ts
+│   │   │   ├── geo.ts           # Haversine distance & elevation profile
+│   │   │   └── geo.test.ts
 │   │   └── styles/
 │   │       └── theme.ts        # Colour palette constants
 │   └── public/

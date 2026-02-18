@@ -3,6 +3,7 @@ import Header from "./components/Layout/Header";
 import Footer from "./components/Layout/Footer";
 import TargetTimeInput from "./components/Controls/TargetTimeInput";
 import RaceMap from "./components/Map/RaceMap";
+import ElevationProfile from "./components/ElevationProfile/ElevationProfile";
 import Sidebar from "./components/Sidebar/Sidebar";
 import { useRaces, useCourse, useCheckpoints } from "./hooks/useRace";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
@@ -80,7 +81,7 @@ function App() {
       />
       <main className="flex min-h-0 flex-1 flex-col lg:flex-row">
         {/* Map area */}
-        <div className="relative min-h-0 lg:flex-[3] bg-surface-alt">
+        <div className="relative min-h-0 lg:flex-[3] lg:flex lg:flex-col bg-surface-alt">
           {/* Target time control overlay */}
           <div className="absolute left-4 right-4 top-4 z-[1000] rounded-lg bg-surface/90 p-3 backdrop-blur-sm lg:left-auto lg:right-4 lg:w-80">
             <TargetTimeInput
@@ -91,7 +92,7 @@ function App() {
             />
           </div>
           {/* Race map */}
-          <div className="h-64 lg:h-full">
+          <div className="h-64 lg:flex-1 lg:min-h-0">
             <RaceMap
               course={course ?? null}
               checkpoints={checkpoints ?? []}
@@ -101,6 +102,14 @@ function App() {
               onCheckpointHover={setHoveredCheckpointId}
             />
           </div>
+          {/* Elevation profile (desktop only, collapsible) */}
+          <ElevationProfile
+            course={course ?? null}
+            checkpoints={checkpoints ?? []}
+            hoveredCheckpointId={hoveredCheckpointId}
+            selectedCheckpointId={selectedCheckpointId}
+            onCheckpointHover={setHoveredCheckpointId}
+          />
         </div>
 
         {/* Sidebar */}
