@@ -14,7 +14,7 @@ import {
 import type { CategoricalChartState } from "recharts/types/chart/types";
 import type { Checkpoint, RaceForecastResponse } from "../../api/types";
 import { chartColors, colors, uncertaintyOpacity } from "../../styles/theme";
-import { formatTemp, formatWind, formatPrecip, windDirectionLabel, formatTimeWithZone } from "../../utils/formatting";
+import { formatTemp, formatWind, formatPrecip, windDirectionLabel, formatTimeWithZone, formatDate } from "../../utils/formatting";
 
 // Static style objects hoisted outside the component to avoid recreation on every render
 const tooltipStyle = {
@@ -39,6 +39,8 @@ interface CourseOverviewProps {
   hoveredCheckpointId: string | null;
   /** Callback when a checkpoint is hovered/unhovered on the chart. */
   onCheckpointHover: (id: string | null) => void;
+  /** ISO 8601 race start time — used to compute forecast availability date. */
+  raceStartTime: string;
 }
 
 interface ChartDataPoint {
@@ -68,6 +70,7 @@ const CourseOverview = memo(function CourseOverview({
   isLoading,
   hoveredCheckpointId,
   onCheckpointHover,
+  raceStartTime,
 }: CourseOverviewProps) {
   // Whether any checkpoint in the race forecast is missing weather data
   const hasAnyUnavailable = useMemo(() => {
@@ -79,6 +82,13 @@ const CourseOverview = memo(function CourseOverview({
     if (!raceForecast || raceForecast.checkpoints.length === 0) return false;
     return raceForecast.checkpoints.every((cp) => cp.weather === null);
   }, [raceForecast]);
+
+  // Date when yr.no forecast data should become available (~10 days before race)
+  const forecastAvailableFrom = useMemo(() => {
+    const raceDate = new Date(raceStartTime);
+    const available = new Date(raceDate.getTime() - 10 * 24 * 60 * 60 * 1000);
+    return formatDate(available.toISOString());
+  }, [raceStartTime]);
 
   // Build chart data from race forecast — only checkpoints with weather data
   const data: ChartDataPoint[] = useMemo(() => {
@@ -173,7 +183,9 @@ const CourseOverview = memo(function CourseOverview({
           <div className="mt-4 rounded-lg bg-surface-alt p-4">
             <p className="text-sm text-text-muted">
               Forecast not yet available — the race date is beyond the ~10-day
-              forecast horizon. Check back closer to race day.
+              forecast horizon. Data should appear around{" "}
+              <span className="text-text-secondary">{forecastAvailableFrom}</span>.
+              Check back then!
             </p>
           </div>
         ) : (

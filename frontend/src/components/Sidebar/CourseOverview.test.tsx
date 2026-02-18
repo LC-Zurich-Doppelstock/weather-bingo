@@ -93,6 +93,8 @@ const mockRaceForecast: RaceForecastResponse = {
   ],
 };
 
+const mockRaceStartTime = "2026-03-01T08:00:00Z";
+
 describe("CourseOverview", () => {
   it("renders loading skeletons when data is loading", () => {
     const { container } = render(
@@ -102,6 +104,7 @@ describe("CourseOverview", () => {
         isLoading={true}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
+        raceStartTime={mockRaceStartTime}
       />
     );
     expect(screen.getByText("Weather Along the Course")).toBeInTheDocument();
@@ -126,6 +129,7 @@ describe("CourseOverview", () => {
         isLoading={false}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
+        raceStartTime={mockRaceStartTime}
       />
     );
     expect(
@@ -141,6 +145,7 @@ describe("CourseOverview", () => {
         isLoading={false}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
+        raceStartTime={mockRaceStartTime}
       />
     );
     expect(screen.getByText("Weather Along the Course")).toBeInTheDocument();
@@ -172,6 +177,7 @@ describe("CourseOverview", () => {
         isLoading={false}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
+        raceStartTime={mockRaceStartTime}
       />
     );
     expect(
@@ -187,6 +193,7 @@ describe("CourseOverview", () => {
         isLoading={false}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
+        raceStartTime={mockRaceStartTime}
       />
     );
     expect(container.innerHTML).toBe("");
@@ -205,6 +212,7 @@ describe("CourseOverview", () => {
         isLoading={false}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
+        raceStartTime={mockRaceStartTime}
       />
     );
     expect(screen.getByText("No checkpoints available")).toBeInTheDocument();

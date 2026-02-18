@@ -69,6 +69,8 @@ function createWrapper() {
   };
 }
 
+const mockRaceStartTime = "2026-03-01T08:00:00Z";
+
 describe("CheckpointDetail", () => {
   it("renders loading skeleton", () => {
     const { container } = render(
@@ -77,6 +79,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={null}
         isLoading={true}
+        raceStartTime={mockRaceStartTime}
       />,
       { wrapper: createWrapper() }
     );
@@ -91,6 +94,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={null}
         isLoading={false}
+        raceStartTime={mockRaceStartTime}
       />,
       { wrapper: createWrapper() }
     );
@@ -113,6 +117,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={unavailableForecast}
         isLoading={false}
+        raceStartTime={mockRaceStartTime}
       />,
       { wrapper: createWrapper() }
     );
@@ -129,6 +134,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
+        raceStartTime={mockRaceStartTime}
       />,
       { wrapper: createWrapper() }
     );
@@ -143,6 +149,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
+        raceStartTime={mockRaceStartTime}
       />,
       { wrapper: createWrapper() }
     );
@@ -157,6 +164,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
+        raceStartTime={mockRaceStartTime}
       />,
       { wrapper: createWrapper() }
     );
@@ -171,6 +179,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
+        raceStartTime={mockRaceStartTime}
       />,
       { wrapper: createWrapper() }
     );
@@ -185,6 +194,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
+        raceStartTime={mockRaceStartTime}
       />,
       { wrapper: createWrapper() }
     );
@@ -199,6 +209,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
+        raceStartTime={mockRaceStartTime}
       />,
       { wrapper: createWrapper() }
     );
@@ -213,6 +224,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={staleForecast}
         isLoading={false}
+        raceStartTime={mockRaceStartTime}
       />,
       { wrapper: createWrapper() }
     );
@@ -229,6 +241,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
+        raceStartTime={mockRaceStartTime}
       />,
       { wrapper: createWrapper() }
     );
@@ -242,6 +255,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
+        raceStartTime={mockRaceStartTime}
       />,
       { wrapper: createWrapper() }
     );
@@ -256,6 +270,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
+        raceStartTime={mockRaceStartTime}
       />,
       { wrapper: createWrapper() }
     );
