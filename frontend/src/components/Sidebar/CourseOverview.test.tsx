@@ -49,6 +49,7 @@ const mockRaceForecast: RaceForecastResponse = {
   race_name: "Vasaloppet",
   target_duration_hours: 8,
   yr_model_run_at: "2026-02-28T06:00:00Z",
+  forecast_horizon: "2026-03-09T12:00:00Z",
   checkpoints: [
     {
       checkpoint_id: "cp-1",
@@ -93,8 +94,6 @@ const mockRaceForecast: RaceForecastResponse = {
   ],
 };
 
-const mockRaceStartTime = "2026-03-01T08:00:00Z";
-
 describe("CourseOverview", () => {
   it("renders loading skeletons when data is loading", () => {
     const { container } = render(
@@ -104,7 +103,7 @@ describe("CourseOverview", () => {
         isLoading={true}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
-        raceStartTime={mockRaceStartTime}
+
       />
     );
     expect(screen.getByText("Weather Along the Course")).toBeInTheDocument();
@@ -115,6 +114,7 @@ describe("CourseOverview", () => {
   it("renders forecast-unavailable message when all checkpoints have no weather", () => {
     const allUnavailable: RaceForecastResponse = {
       ...mockRaceForecast,
+      forecast_horizon: "2026-02-25T18:00:00Z",
       checkpoints: mockRaceForecast.checkpoints.map((cp) => ({
         ...cp,
         forecast_available: false,
@@ -129,11 +129,14 @@ describe("CourseOverview", () => {
         isLoading={false}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
-        raceStartTime={mockRaceStartTime}
       />
     );
     expect(
       screen.getByText(/forecast not yet available/i)
+    ).toBeInTheDocument();
+    // Should show the dynamic horizon date
+    expect(
+      screen.getByText(/forecast horizon/i)
     ).toBeInTheDocument();
   });
 
@@ -145,7 +148,7 @@ describe("CourseOverview", () => {
         isLoading={false}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
-        raceStartTime={mockRaceStartTime}
+
       />
     );
     expect(screen.getByText("Weather Along the Course")).toBeInTheDocument();
@@ -177,7 +180,7 @@ describe("CourseOverview", () => {
         isLoading={false}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
-        raceStartTime={mockRaceStartTime}
+
       />
     );
     expect(
@@ -193,7 +196,7 @@ describe("CourseOverview", () => {
         isLoading={false}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
-        raceStartTime={mockRaceStartTime}
+
       />
     );
     expect(container.innerHTML).toBe("");
@@ -212,7 +215,7 @@ describe("CourseOverview", () => {
         isLoading={false}
         hoveredCheckpointId={null}
         onCheckpointHover={vi.fn()}
-        raceStartTime={mockRaceStartTime}
+
       />
     );
     expect(screen.getByText("No checkpoints available")).toBeInTheDocument();

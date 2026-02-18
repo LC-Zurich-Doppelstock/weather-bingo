@@ -9,6 +9,7 @@ import {
   windDirectionLabel,
   formatPercent,
   formatDate,
+  formatCheckBackMessage,
   RACE_TIMEZONE,
 } from "./formatting";
 
@@ -173,5 +174,39 @@ describe("formatTimeWithZone", () => {
 describe("RACE_TIMEZONE", () => {
   it("is Europe/Stockholm", () => {
     expect(RACE_TIMEZONE).toBe("Europe/Stockholm");
+  });
+});
+
+describe("formatCheckBackMessage", () => {
+  it("returns generic message when no horizon", () => {
+    expect(formatCheckBackMessage(null, "2026-03-01T07:00:00Z")).toBe(
+      "Check back as it extends daily."
+    );
+  });
+
+  it("returns tomorrow when 1 day away", () => {
+    expect(
+      formatCheckBackMessage("2026-02-28T12:00:00Z", "2026-03-01T07:00:00Z")
+    ).toBe("Check back tomorrow.");
+  });
+
+  it("returns tomorrow when less than 1 day away", () => {
+    expect(
+      formatCheckBackMessage("2026-02-28T18:00:00Z", "2026-03-01T07:00:00Z")
+    ).toBe("Check back tomorrow.");
+  });
+
+  it("returns ~N days for multi-day gap", () => {
+    // 5 days gap
+    expect(
+      formatCheckBackMessage("2026-02-24T12:00:00Z", "2026-03-01T07:00:00Z")
+    ).toBe("Check back in ~5 days.");
+  });
+
+  it("returns ~2 days for slightly over 1 day", () => {
+    // horizon Feb 27 00:00, target Mar 1 07:00 = 2.29 days → ceil = 3
+    expect(
+      formatCheckBackMessage("2026-02-27T00:00:00Z", "2026-03-01T07:00:00Z")
+    ).toBe("Check back in ~3 days.");
   });
 });

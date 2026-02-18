@@ -6,6 +6,7 @@ import {
   formatPercent,
   formatTimeWithZone,
   formatDate,
+  formatCheckBackMessage,
   windDirectionLabel,
 } from "../../utils/formatting";
 import MiniTimeline from "./MiniTimeline";
@@ -19,8 +20,6 @@ interface CheckpointDetailProps {
   forecast: ForecastResponse | null;
   /** Whether the forecast is still loading. */
   isLoading: boolean;
-  /** ISO 8601 race start time — used to compute forecast availability date. */
-  raceStartTime: string;
 }
 
 /**
@@ -32,7 +31,6 @@ export default function CheckpointDetail({
   passTime,
   forecast,
   isLoading,
-  raceStartTime,
 }: CheckpointDetailProps) {
   if (isLoading) {
     return (
@@ -62,19 +60,18 @@ export default function CheckpointDetail({
   }
 
   if (!forecast.forecast_available || forecast.weather === null) {
-    const raceDate = new Date(raceStartTime);
-    const available = new Date(raceDate.getTime() - 10 * 24 * 60 * 60 * 1000);
-    const forecastAvailableFrom = formatDate(available.toISOString());
+    const checkBackMsg = formatCheckBackMessage(forecast.forecast_horizon, passTime);
 
     return (
       <div className="space-y-4 p-4">
         <CheckpointHeader checkpoint={checkpoint} passTime={passTime} />
         <div className="rounded-lg bg-surface-alt p-4">
           <p className="text-sm text-text-muted">
-            Forecast not yet available — the race date is beyond the ~10-day
-            forecast horizon. Data should appear around{" "}
-            <span className="text-text-secondary">{forecastAvailableFrom}</span>.
-            Check back then!
+            Forecast not yet available — the race date is beyond yr.no&apos;s
+            current forecast horizon{forecast.forecast_horizon && (
+              <> (<span className="text-text-secondary">{formatDate(forecast.forecast_horizon)}</span>)</>
+            )}.
+            {" "}{checkBackMsg}
           </p>
         </div>
       </div>

@@ -22,7 +22,7 @@ use crate::db::models::{Checkpoint, Forecast};
 use crate::db::queries::{self, InsertForecastParams};
 use crate::errors::AppError;
 use crate::services::yr::{
-    extract_forecasts_at_times, parse_expires_header, YrClient, YrParsedForecast,
+    extract_forecasts_at_times, parse_expires_header, ExtractionResult, YrClient, YrParsedForecast,
     YrTimeseriesResult,
 };
 
@@ -381,15 +381,15 @@ fn build_single_insert_params(
 /// 3. Writes to the forecasts table for history (ON CONFLICT DO NOTHING).
 /// 4. Re-queries the DB for the canonical forecast row.
 ///
-/// Returns `(Some(forecast), is_stale)` when a forecast is available, or
-/// `(None, false)` when yr.no doesn't cover the requested time (e.g. race
-/// date is beyond the ~10-day forecast horizon).
+/// Returns `(Some(forecast), is_stale, Some(horizon))` when a forecast is available,
+/// `(None, false, Some(horizon))` when yr.no doesn't cover the requested time but
+/// the cache is available, or `(None, false, None)` on yr.no failure with no cache.
 pub async fn resolve_forecast(
     pool: &PgPool,
     yr_client: &YrClient,
     checkpoint: &Checkpoint,
     forecast_time: DateTime<Utc>,
-) -> Result<(Option<Forecast>, bool), AppError> {
+) -> Result<(Option<Forecast>, bool, Option<DateTime<Utc>>), AppError> {
     // Step 1: Try to get fresh yr.no data
     let raw_json = match ensure_yr_cache_fresh(pool, yr_client, checkpoint).await {
         Ok(json) => json,
@@ -398,7 +398,7 @@ pub async fn resolve_forecast(
             let cached = queries::get_latest_forecast(pool, checkpoint.id, forecast_time).await?;
             if let Some(forecast) = cached {
                 tracing::warn!("yr.no unavailable, returning stale data: {}", e);
-                return Ok((Some(forecast), true));
+                return Ok((Some(forecast), true, None));
             }
             return Err(AppError::ExternalServiceError(format!(
                 "yr.no unavailable and no cached data: {}",
@@ -408,7 +408,10 @@ pub async fn resolve_forecast(
     };
 
     // Step 2: Extract forecast from cached JSON in-memory (extract-on-read)
-    let parsed = extract_forecasts_at_times(raw_json, &[forecast_time])?;
+    let ExtractionResult {
+        forecasts: parsed,
+        forecast_horizon,
+    } = extract_forecasts_at_times(raw_json, &[forecast_time])?;
     let maybe_parsed = parsed.into_iter().next().flatten();
 
     match maybe_parsed {
@@ -419,11 +422,11 @@ pub async fn resolve_forecast(
 
             // Step 4: Re-query DB for the canonical forecast row
             let forecast = queries::get_latest_forecast(pool, checkpoint.id, forecast_time).await?;
-            Ok((forecast, false))
+            Ok((forecast, false, Some(forecast_horizon)))
         }
         None => {
             // Beyond yr.no horizon — no forecast available for this time
-            Ok((None, false))
+            Ok((None, false, Some(forecast_horizon)))
         }
     }
 }
@@ -438,10 +441,13 @@ pub struct CheckpointWithTime {
 #[derive(Clone)]
 pub struct ResolvedForecast {
     /// The forecast data, or `None` if yr.no doesn't cover the requested time
-    /// (e.g. race date is beyond the ~10-day forecast horizon).
+    /// (e.g. race date is beyond yr.no's forecast horizon).
     pub forecast: Option<Forecast>,
     /// Whether this result is served from stale cache (yr.no was unreachable).
     pub is_stale: bool,
+    /// The furthest timestamp in the yr.no timeseries for this checkpoint.
+    /// `None` when served from stale DB cache (yr.no was unreachable).
+    pub forecast_horizon: Option<DateTime<Utc>>,
 }
 
 /// Resolve forecasts for multiple checkpoints in a race — extract-on-read.
@@ -489,6 +495,7 @@ pub async fn resolve_race_forecasts(
     let cached_forecasts = queries::get_latest_forecasts_batch(pool, &pairs).await?;
 
     let mut results: Vec<Option<ResolvedForecast>> = vec![None; n];
+    let mut horizons: Vec<Option<DateTime<Utc>>> = vec![None; n];
     // Collect insert params for batch DB write (issue #7: avoid sequential inserts)
     let mut insert_params: Vec<InsertForecastParams> = Vec::new();
 
@@ -497,7 +504,10 @@ pub async fn resolve_race_forecasts(
             Ok(raw_json) => {
                 // Extract forecast from cached JSON in-memory
                 let forecast_time = checkpoints[idx].forecast_time;
-                let parsed = extract_forecasts_at_times(raw_json, &[forecast_time])?;
+                let ExtractionResult {
+                    forecasts: parsed,
+                    forecast_horizon,
+                } = extract_forecasts_at_times(raw_json, &[forecast_time])?;
                 let maybe_parsed = parsed.into_iter().next().flatten();
 
                 match maybe_parsed {
@@ -510,14 +520,16 @@ pub async fn resolve_race_forecasts(
                         );
                         insert_params.push(params);
 
-                        // Mark for batch re-query below
+                        // Store horizon, mark for batch re-query below
                         results[idx] = None; // will be filled by batch re-query
+                        horizons[idx] = Some(forecast_horizon);
                     }
                     None => {
                         // Beyond yr.no horizon — no forecast available
                         results[idx] = Some(ResolvedForecast {
                             forecast: None,
                             is_stale: false,
+                            forecast_horizon: Some(forecast_horizon),
                         });
                     }
                 }
@@ -533,6 +545,7 @@ pub async fn resolve_race_forecasts(
                     results[idx] = Some(ResolvedForecast {
                         forecast: Some(cached),
                         is_stale: true,
+                        forecast_horizon: None,
                     });
                 } else {
                     return Err(AppError::ExternalServiceError(format!(
@@ -571,14 +584,18 @@ pub async fn resolve_race_forecasts(
     let requeried = queries::get_latest_forecasts_batch(pool, &requery_pairs).await?;
 
     let mut requery_iter = requeried.into_iter();
-    for result in results.iter_mut() {
+    let mut horizon_idx = 0;
+    for (idx, result) in results.iter_mut().enumerate() {
         if result.is_none() {
             *result = Some(ResolvedForecast {
                 forecast: requery_iter.next().unwrap_or(None),
                 is_stale: false,
+                forecast_horizon: horizons[idx],
             });
+            horizon_idx += 1;
         }
     }
+    let _ = horizon_idx; // suppress unused warning
 
     results
         .into_iter()

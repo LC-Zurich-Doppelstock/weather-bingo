@@ -86,7 +86,10 @@ use crate::services::gpx::GpxRace;
 /// Convert an f64 to a `Decimal`, falling back to zero for non-finite values (NaN, ±Inf).
 fn f64_to_dec(v: f64) -> Decimal {
     if !v.is_finite() {
-        tracing::warn!("f64_to_dec received non-finite value {}, defaulting to 0", v);
+        tracing::warn!(
+            "f64_to_dec received non-finite value {}, defaulting to 0",
+            v
+        );
         return Decimal::ZERO;
     }
     Decimal::from_f64(v).unwrap_or_else(|| Decimal::new(v as i64, 0))
@@ -470,31 +473,31 @@ pub async fn insert_forecast(
     };
 
     sqlx::query_as::<_, Forecast>(sql)
-    .bind(p.checkpoint_id)
-    .bind(p.forecast_time)
-    .bind(p.fetched_at)
-    .bind(&p.source)
-    .bind(p.temperature_c)
-    .bind(p.temperature_percentile_10_c)
-    .bind(p.temperature_percentile_90_c)
-    .bind(p.wind_speed_ms)
-    .bind(p.wind_speed_percentile_10_ms)
-    .bind(p.wind_speed_percentile_90_ms)
-    .bind(p.wind_direction_deg)
-    .bind(p.wind_gust_ms)
-    .bind(p.precipitation_mm)
-    .bind(p.precipitation_min_mm)
-    .bind(p.precipitation_max_mm)
-    .bind(p.humidity_pct)
-    .bind(p.dew_point_c)
-    .bind(p.cloud_cover_pct)
-    .bind(p.uv_index)
-    .bind(&p.symbol_code)
-    .bind(p.feels_like_c)
-    .bind(&p.precipitation_type)
-    .bind(p.yr_model_run_at)
-    .fetch_optional(pool)
-    .await
+        .bind(p.checkpoint_id)
+        .bind(p.forecast_time)
+        .bind(p.fetched_at)
+        .bind(&p.source)
+        .bind(p.temperature_c)
+        .bind(p.temperature_percentile_10_c)
+        .bind(p.temperature_percentile_90_c)
+        .bind(p.wind_speed_ms)
+        .bind(p.wind_speed_percentile_10_ms)
+        .bind(p.wind_speed_percentile_90_ms)
+        .bind(p.wind_direction_deg)
+        .bind(p.wind_gust_ms)
+        .bind(p.precipitation_mm)
+        .bind(p.precipitation_min_mm)
+        .bind(p.precipitation_max_mm)
+        .bind(p.humidity_pct)
+        .bind(p.dew_point_c)
+        .bind(p.cloud_cover_pct)
+        .bind(p.uv_index)
+        .bind(&p.symbol_code)
+        .bind(p.feels_like_c)
+        .bind(&p.precipitation_type)
+        .bind(p.yr_model_run_at)
+        .fetch_optional(pool)
+        .await
 }
 
 /// Get a single checkpoint by ID.
@@ -596,7 +599,10 @@ mod tests {
     #[test]
     fn test_f64_to_dec_normal() {
         let d = f64_to_dec(3.14);
-        assert!(d > Decimal::ZERO, "Normal float should produce positive Decimal");
+        assert!(
+            d > Decimal::ZERO,
+            "Normal float should produce positive Decimal"
+        );
     }
 
     #[test]
@@ -614,6 +620,10 @@ mod tests {
     #[test]
     fn test_f64_to_dec_neg_infinity() {
         let d = f64_to_dec(f64::NEG_INFINITY);
-        assert_eq!(d, Decimal::ZERO, "Negative infinity should be converted to 0");
+        assert_eq!(
+            d,
+            Decimal::ZERO,
+            "Negative infinity should be converted to 0"
+        );
     }
 }

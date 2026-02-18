@@ -79,3 +79,20 @@ export function formatDate(isoString: string): string {
 export function formatPercent(value: number): string {
   return `${Math.round(value)}%`;
 }
+
+/**
+ * Return a human-readable "check back" message based on the gap between
+ * the yr.no forecast horizon and the target time the user cares about.
+ * Returns a generic fallback when no horizon is available.
+ */
+export function formatCheckBackMessage(
+  forecastHorizon: string | null,
+  targetTime: string,
+): string {
+  if (!forecastHorizon) return "Check back as it extends daily.";
+  const horizonMs = new Date(forecastHorizon).getTime();
+  const targetMs = new Date(targetTime).getTime();
+  const daysAway = Math.ceil((targetMs - horizonMs) / (24 * 60 * 60 * 1000));
+  if (daysAway <= 1) return "Check back tomorrow.";
+  return `Check back in ~${daysAway} days.`;
+}

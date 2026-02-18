@@ -96,6 +96,15 @@ pub struct YrParsedForecast {
     pub resolution: ForecastResolution,
 }
 
+/// Result of extracting forecasts from a yr.no cached response.
+#[derive(Debug, Clone)]
+pub struct ExtractionResult {
+    /// One `Option<YrParsedForecast>` per requested time.
+    pub forecasts: Vec<Option<YrParsedForecast>>,
+    /// The furthest timestamp in the yr.no timeseries — the actual forecast horizon.
+    pub forecast_horizon: DateTime<Utc>,
+}
+
 // --- yr.no JSON response types ---
 
 #[derive(Debug, Deserialize)]
@@ -169,7 +178,10 @@ struct YrPeriodDetails {
 
 fn f64_to_decimal(v: f64) -> Decimal {
     if !v.is_finite() {
-        tracing::warn!("f64_to_decimal received non-finite value {}, defaulting to 0", v);
+        tracing::warn!(
+            "f64_to_decimal received non-finite value {}, defaulting to 0",
+            v
+        );
         return Decimal::ZERO;
     }
     Decimal::from_str(&format!("{:.1}", v)).unwrap_or_default()
@@ -286,18 +298,20 @@ impl YrClient {
 
 /// Extract forecasts for multiple times from a single cached yr.no timeseries.
 ///
-/// Returns one `Option<YrParsedForecast>` per requested time:
-/// - `Some(forecast)` if yr.no has a timeseries entry within the resolution-appropriate
-///   tolerance (1h for hourly data, 3h for 6-hourly data).
-/// - `None` if the closest entry is too far away (e.g. the requested time is beyond
-///   yr.no's ~10-day forecast horizon).
+/// Returns an `ExtractionResult` containing:
+/// - One `Option<YrParsedForecast>` per requested time:
+///   - `Some(forecast)` if yr.no has a timeseries entry within the resolution-appropriate
+///     tolerance (1h for hourly data, 3h for 6-hourly data).
+///   - `None` if the closest entry is too far away (e.g. the requested time is beyond
+///     yr.no's forecast horizon).
+/// - The `forecast_horizon`: the last (furthest future) timestamp in the yr.no timeseries.
 ///
 /// Much more efficient than calling `extract_forecast_at_time` N times because
 /// we deserialize the JSON only once.
 pub fn extract_forecasts_at_times(
     raw_json: serde_json::Value,
     forecast_times: &[DateTime<Utc>],
-) -> Result<Vec<Option<YrParsedForecast>>, AppError> {
+) -> Result<ExtractionResult, AppError> {
     let yr_response: YrResponse = serde_json::from_value(raw_json).map_err(|e| {
         AppError::ExternalServiceError(format!("yr.no response structure error: {}", e))
     })?;
@@ -325,17 +339,15 @@ pub fn extract_forecasts_at_times(
     // Entries with unparseable timestamps are skipped (logged) rather than defaulting to epoch 0.
     let parsed_entries: Vec<(i64, &YrTimeseries)> = timeseries
         .iter()
-        .filter_map(|ts| {
-            match chrono::DateTime::parse_from_rfc3339(&ts.time) {
-                Ok(dt) => Some((dt.timestamp(), ts)),
-                Err(e) => {
-                    tracing::warn!(
-                        "Skipping yr.no timeseries entry with unparseable time '{}': {}",
-                        ts.time,
-                        e,
-                    );
-                    None
-                }
+        .filter_map(|ts| match chrono::DateTime::parse_from_rfc3339(&ts.time) {
+            Ok(dt) => Some((dt.timestamp(), ts)),
+            Err(e) => {
+                tracing::warn!(
+                    "Skipping yr.no timeseries entry with unparseable time '{}': {}",
+                    ts.time,
+                    e,
+                );
+                None
             }
         })
         .collect();
@@ -345,6 +357,16 @@ pub fn extract_forecasts_at_times(
             "yr.no timeseries has no entries with valid timestamps".to_string(),
         ));
     }
+
+    // The last entry's timestamp is the actual forecast horizon
+    let forecast_horizon = {
+        let last_ts = parsed_entries.last().unwrap().0;
+        DateTime::<Utc>::from_timestamp(last_ts, 0).ok_or_else(|| {
+            AppError::ExternalServiceError(
+                "yr.no last timeseries timestamp out of range".to_string(),
+            )
+        })?
+    };
 
     let mut results = Vec::with_capacity(forecast_times.len());
 
@@ -380,7 +402,10 @@ pub fn extract_forecasts_at_times(
         }
     }
 
-    Ok(results)
+    Ok(ExtractionResult {
+        forecasts: results,
+        forecast_horizon,
+    })
 }
 
 /// Parse a single yr.no timeseries entry into a `YrParsedForecast`.
@@ -522,8 +547,8 @@ mod tests {
         raw_json: &serde_json::Value,
         forecast_time: DateTime<Utc>,
     ) -> Result<Option<YrParsedForecast>, AppError> {
-        let mut results = extract_forecasts_at_times(raw_json.clone(), &[forecast_time])?;
-        Ok(results.remove(0))
+        let result = extract_forecasts_at_times(raw_json.clone(), &[forecast_time])?;
+        Ok(result.forecasts.into_iter().next().flatten())
     }
 
     #[test]
@@ -547,7 +572,11 @@ mod tests {
     #[test]
     fn test_f64_to_decimal_neg_infinity() {
         let d = f64_to_decimal(f64::NEG_INFINITY);
-        assert_eq!(d, Decimal::ZERO, "Negative infinity should be converted to 0");
+        assert_eq!(
+            d,
+            Decimal::ZERO,
+            "Negative infinity should be converted to 0"
+        );
     }
 
     #[test]
@@ -743,12 +772,21 @@ mod tests {
             "2026-03-01T10:00:00Z".parse::<DateTime<Utc>>().unwrap(),
         ];
 
-        let results = extract_forecasts_at_times(json, &times).unwrap();
-        assert_eq!(results.len(), 2);
-        let f0 = results[0].as_ref().expect("First entry should be Some");
-        let f1 = results[1].as_ref().expect("Second entry should be Some");
+        let result = extract_forecasts_at_times(json, &times).unwrap();
+        assert_eq!(result.forecasts.len(), 2);
+        let f0 = result.forecasts[0]
+            .as_ref()
+            .expect("First entry should be Some");
+        let f1 = result.forecasts[1]
+            .as_ref()
+            .expect("Second entry should be Some");
         assert_eq!(f0.temperature_c, Decimal::from_str("-5.0").unwrap());
         assert_eq!(f1.temperature_c, Decimal::from_str("-2.0").unwrap());
+        // Horizon should be the last timeseries entry
+        assert_eq!(
+            result.forecast_horizon,
+            "2026-03-01T10:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
     }
 
     #[test]
@@ -1123,14 +1161,19 @@ mod tests {
             "2026-04-01T12:00:00Z".parse::<DateTime<Utc>>().unwrap(), // way out → None
         ];
 
-        let results = extract_forecasts_at_times(json, &times).unwrap();
-        assert_eq!(results.len(), 3);
-        assert!(results[0].is_some(), "Exact match should be Some");
+        let result = extract_forecasts_at_times(json, &times).unwrap();
+        assert_eq!(result.forecasts.len(), 3);
+        assert!(result.forecasts[0].is_some(), "Exact match should be Some");
         assert!(
-            results[1].is_some(),
+            result.forecasts[1].is_some(),
             "30min offset should be Some (within 1h)"
         );
-        assert!(results[2].is_none(), "31 days out should be None");
+        assert!(result.forecasts[2].is_none(), "31 days out should be None");
+        // Horizon is the last timeseries entry (08:00)
+        assert_eq!(
+            result.forecast_horizon,
+            "2026-03-01T08:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
     }
 
     #[test]

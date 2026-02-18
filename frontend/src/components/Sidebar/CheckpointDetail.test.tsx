@@ -25,6 +25,7 @@ const mockForecast: ForecastResponse = {
   yr_model_run_at: "2026-02-28T06:00:00Z",
   source: "yr.no",
   stale: false,
+  forecast_horizon: "2026-03-09T12:00:00Z",
   weather: {
     temperature_c: -5.0,
     temperature_percentile_10_c: -8.0,
@@ -69,8 +70,6 @@ function createWrapper() {
   };
 }
 
-const mockRaceStartTime = "2026-03-01T08:00:00Z";
-
 describe("CheckpointDetail", () => {
   it("renders loading skeleton", () => {
     const { container } = render(
@@ -79,7 +78,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={null}
         isLoading={true}
-        raceStartTime={mockRaceStartTime}
+
       />,
       { wrapper: createWrapper() }
     );
@@ -94,7 +93,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={null}
         isLoading={false}
-        raceStartTime={mockRaceStartTime}
+
       />,
       { wrapper: createWrapper() }
     );
@@ -110,6 +109,7 @@ describe("CheckpointDetail", () => {
       weather: null,
       fetched_at: null,
       source: null,
+      forecast_horizon: "2026-02-25T18:00:00Z",
     };
     render(
       <CheckpointDetail
@@ -117,13 +117,16 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={unavailableForecast}
         isLoading={false}
-        raceStartTime={mockRaceStartTime}
       />,
       { wrapper: createWrapper() }
     );
     expect(screen.getByText("Salen")).toBeInTheDocument();
     expect(
       screen.getByText(/forecast not yet available/i)
+    ).toBeInTheDocument();
+    // Should show the dynamic horizon date
+    expect(
+      screen.getByText(/forecast horizon/i)
     ).toBeInTheDocument();
   });
 
@@ -134,7 +137,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
-        raceStartTime={mockRaceStartTime}
+
       />,
       { wrapper: createWrapper() }
     );
@@ -149,7 +152,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
-        raceStartTime={mockRaceStartTime}
+
       />,
       { wrapper: createWrapper() }
     );
@@ -164,7 +167,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
-        raceStartTime={mockRaceStartTime}
+
       />,
       { wrapper: createWrapper() }
     );
@@ -179,7 +182,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
-        raceStartTime={mockRaceStartTime}
+
       />,
       { wrapper: createWrapper() }
     );
@@ -194,7 +197,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
-        raceStartTime={mockRaceStartTime}
+
       />,
       { wrapper: createWrapper() }
     );
@@ -209,7 +212,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
-        raceStartTime={mockRaceStartTime}
+
       />,
       { wrapper: createWrapper() }
     );
@@ -224,7 +227,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={staleForecast}
         isLoading={false}
-        raceStartTime={mockRaceStartTime}
+
       />,
       { wrapper: createWrapper() }
     );
@@ -241,7 +244,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
-        raceStartTime={mockRaceStartTime}
+
       />,
       { wrapper: createWrapper() }
     );
@@ -255,7 +258,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
-        raceStartTime={mockRaceStartTime}
+
       />,
       { wrapper: createWrapper() }
     );
@@ -270,7 +273,7 @@ describe("CheckpointDetail", () => {
         passTime="2026-03-01T07:00:00Z"
         forecast={mockForecast}
         isLoading={false}
-        raceStartTime={mockRaceStartTime}
+
       />,
       { wrapper: createWrapper() }
     );

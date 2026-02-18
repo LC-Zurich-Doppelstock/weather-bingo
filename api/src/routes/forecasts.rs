@@ -166,7 +166,7 @@ pub struct ForecastResponse {
     /// When `forecast_available` is false, this is the originally requested time.
     pub forecast_time: String,
     /// Whether forecast data is available for the requested time.
-    /// `false` when the race date is beyond yr.no's ~10-day forecast horizon.
+    /// `false` when the race date is beyond yr.no's forecast horizon.
     pub forecast_available: bool,
     /// When this forecast was last fetched from the source (ISO 8601).
     /// Null when `forecast_available` is false.
@@ -178,6 +178,10 @@ pub struct ForecastResponse {
     pub source: Option<String>,
     /// Whether this forecast is stale (yr.no was unreachable, serving cached data)
     pub stale: bool,
+    /// The furthest datetime yr.no currently forecasts to (ISO 8601).
+    /// Null when yr.no cache is unavailable (stale fallback).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forecast_horizon: Option<String>,
     /// Full weather data. Null when `forecast_available` is false.
     pub weather: Option<Weather>,
 }
@@ -238,6 +242,10 @@ pub struct RaceForecastResponse {
     /// When yr.no's weather model generated the forecast data (ISO 8601).
     /// Uses the oldest model run across all checkpoints, or null if unknown.
     pub yr_model_run_at: Option<String>,
+    /// The furthest datetime yr.no currently forecasts to (ISO 8601).
+    /// Uses the minimum horizon across all checkpoints (most conservative), or null if unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forecast_horizon: Option<String>,
     /// Weather forecasts at each checkpoint
     pub checkpoints: Vec<RaceForecastCheckpoint>,
 }
@@ -281,8 +289,10 @@ pub async fn get_checkpoint_forecast(
 
     let checkpoint = get_checkpoint(&state.pool, checkpoint_id).await?;
 
-    let (maybe_forecast, is_stale) =
+    let (maybe_forecast, is_stale, forecast_horizon) =
         resolve_forecast(&state.pool, &state.yr_client, &checkpoint, forecast_time).await?;
+
+    let horizon_str = forecast_horizon.map(|dt| dt.to_rfc3339());
 
     let response = match maybe_forecast {
         Some(forecast) => ForecastResponse {
@@ -294,6 +304,7 @@ pub async fn get_checkpoint_forecast(
             yr_model_run_at: forecast.yr_model_run_at.map(|dt| dt.to_rfc3339()),
             source: Some(forecast.source.clone()),
             stale: is_stale,
+            forecast_horizon: horizon_str,
             weather: Some(Weather::full(&forecast)),
         },
         None => ForecastResponse {
@@ -305,6 +316,7 @@ pub async fn get_checkpoint_forecast(
             yr_model_run_at: None,
             source: None,
             stale: false,
+            forecast_horizon: horizon_str,
             weather: None,
         },
     };
@@ -478,6 +490,13 @@ pub async fn get_race_forecast(
         .min()
         .map(|dt| dt.to_rfc3339());
 
+    // Find the minimum forecast horizon across all checkpoints (most conservative)
+    let forecast_horizon = resolved
+        .iter()
+        .filter_map(|r| r.forecast_horizon)
+        .min()
+        .map(|dt| dt.to_rfc3339());
+
     let any_stale = resolved.iter().any(|r| r.is_stale);
     let mut headers = HeaderMap::new();
     if any_stale {
@@ -491,6 +510,7 @@ pub async fn get_race_forecast(
             race_name: race.name,
             target_duration_hours: params.target_duration_hours,
             yr_model_run_at,
+            forecast_horizon,
             checkpoints: checkpoint_forecasts,
         }),
     ))

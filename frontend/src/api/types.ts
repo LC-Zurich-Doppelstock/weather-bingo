@@ -64,6 +64,7 @@ export interface ForecastResponse {
   source: string | null; // null when forecast unavailable
   stale: boolean;
   weather: ForecastWeather | null; // null when beyond yr.no forecast horizon
+  forecast_horizon: string | null; // ISO 8601 — furthest timestamp in yr.no data
 }
 
 export interface ForecastHistoryEntry {
@@ -95,5 +96,6 @@ export interface RaceForecastResponse {
   race_name: string;
   target_duration_hours: number;
   yr_model_run_at: string | null; // ISO 8601
+  forecast_horizon: string | null; // ISO 8601 — min horizon across all checkpoints
   checkpoints: RaceForecastCheckpoint[];
 }

@@ -159,7 +159,6 @@ export default function Sidebar({
             passTime={passTime}
             forecast={forecast ?? null}
             isLoading={forecastLoading}
-            raceStartTime={race.start_time}
           />
         </div>
       );
@@ -206,7 +205,6 @@ export default function Sidebar({
         isLoading={raceForecastLoading}
         hoveredCheckpointId={hoveredCheckpointId}
         onCheckpointHover={onCheckpointHover}
-        raceStartTime={race.start_time}
       />
     </div>
   );
