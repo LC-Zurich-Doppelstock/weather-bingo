@@ -88,7 +88,7 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - name: Enable auto-merge
-        run: gh pr merge ${{ github.event.pull_request.number }} --auto --squash --repo ${{ github.repository }}
+      - name: Merge PR
+        run: gh pr merge ${{ github.event.pull_request.number }} --squash --delete-branch --repo ${{ github.repository }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
