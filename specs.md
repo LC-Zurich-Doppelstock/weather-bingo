@@ -111,6 +111,7 @@ Table: forecasts
 │   ── Calculated by API (not from yr.no) ──
 ├── feels_like_c                DECIMAL     Wind chill / feels-like (calculated)
 ├── precipitation_type          VARCHAR     "snow", "rain", "sleet", "none" (inferred from symbol_code + temp)
+├── snow_temperature_c          DECIMAL     Snow surface temperature °C (calculated, nullable; dew-point-based model)
 │
 ├── yr_model_run_at         TIMESTAMPTZ When the yr.no weather model was run (nullable)
 └── created_at              TIMESTAMPTZ
@@ -852,6 +853,7 @@ Returns the parsed course GPS track as an array of coordinate points (extracted 
     "precipitation_min_mm": 0.1,
     "precipitation_max_mm": 0.8,
     "precipitation_type": "snow",
+    "snow_temperature_c": -6.8,
     "humidity_pct": 82,
     "dew_point_c": -6.2,
     "cloud_cover_pct": 90,
@@ -935,6 +937,7 @@ Returns the parsed course GPS track as an array of coordinate points (extracted 
         "wind_direction_deg": 315,
         "precipitation_mm": 0.2,
         "precipitation_type": "snow",
+        "snow_temperature_c": -8.1,
         "symbol_code": "lightsnow"
       }
     },

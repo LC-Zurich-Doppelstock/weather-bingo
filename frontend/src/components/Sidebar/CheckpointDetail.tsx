@@ -10,6 +10,10 @@ import {
   windDirectionLabel,
 } from "../../utils/formatting";
 import MiniTimeline from "./MiniTimeline";
+import InfoPopover from "../ui/InfoPopover";
+
+const SNOW_TEMP_INFO =
+  "Snow Temperature (estimated) \u2014 Estimated snow surface temperature using a dew-point-based model grounded in Raleigh et al. (2013) and Pomeroy et al. (2016). The base temperature is the lower of air temperature and dew point (dry air \u2192 colder snow). A radiative cooling offset is applied for clear skies, damped by wind. Formula: T_snow = min(T_base \u2212 offset, 0\u00B0C), where T_base = min(T_air, T_dew), offset = (1 \u2212 cloud%) \u00D7 3 \u00D7 1/(1 + wind/5). This is an approximation for wax selection \u2014 actual snow temperature depends on additional factors like solar radiation, snow age, and ground heat.";
 
 interface CheckpointDetailProps {
   /** The selected checkpoint. */
@@ -106,6 +110,16 @@ export default function CheckpointDetail({
               {formatTemp(w.temperature_percentile_90_c)}
             </div>
           )}
+      </WeatherRow>
+
+      {/* Snow Temperature */}
+      <WeatherRow
+        label="Snow Temperature"
+        labelExtra={<InfoPopover content={SNOW_TEMP_INFO} ariaLabel="Snow temperature info" />}
+      >
+        <div className="text-lg font-semibold text-text-primary">
+          {formatTemp(w.snow_temperature_c)}
+        </div>
       </WeatherRow>
 
       {/* Wind */}
@@ -218,15 +232,19 @@ function CheckpointHeader({
 /** A labeled row in the weather detail view. */
 function WeatherRow({
   label,
+  labelExtra,
   children,
 }: {
   label: string;
+  /** Optional extra content rendered inline after the label (e.g. InfoPopover). */
+  labelExtra?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="rounded-lg bg-surface-alt p-3" role="group" aria-label={label}>
       <div className="mb-1 text-xs font-medium uppercase tracking-wider text-text-muted">
         {label}
+        {labelExtra}
       </div>
       {children}
     </div>

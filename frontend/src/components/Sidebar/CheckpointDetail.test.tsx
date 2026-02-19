@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterEach, afterAll } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
@@ -31,6 +31,7 @@ const mockForecast: ForecastResponse = {
     temperature_percentile_10_c: -8.0,
     temperature_percentile_90_c: -2.0,
     feels_like_c: -10.5,
+    snow_temperature_c: -8.5,
     wind_speed_ms: 3.2,
     wind_speed_percentile_10_ms: 1.5,
     wind_speed_percentile_90_ms: 5.0,
@@ -160,6 +161,22 @@ describe("CheckpointDetail", () => {
     expect(screen.getByText(/feels like -10°C/i)).toBeInTheDocument();
   });
 
+  it("renders snow temperature with info popover button", () => {
+    render(
+      <CheckpointDetail
+        checkpoint={mockCheckpoint}
+        passTime="2026-03-01T07:00:00Z"
+        forecast={mockForecast}
+        isLoading={false}
+      />,
+      { wrapper: createWrapper() }
+    );
+    const snowGroup = screen.getByRole("group", { name: "Snow Temperature" });
+    expect(snowGroup).toBeInTheDocument();
+    expect(screen.getByText("-8°C")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Snow temperature info" })).toBeInTheDocument();
+  });
+
   it("renders wind data with direction", () => {
     render(
       <CheckpointDetail
@@ -186,7 +203,8 @@ describe("CheckpointDetail", () => {
       />,
       { wrapper: createWrapper() }
     );
-    expect(screen.getByText(/snow/i)).toBeInTheDocument();
+    const precipGroup = screen.getByRole("group", { name: "Precipitation" });
+    expect(within(precipGroup).getByText(/snow/i)).toBeInTheDocument();
     expect(screen.getByText("0.5 mm")).toBeInTheDocument();
   });
 

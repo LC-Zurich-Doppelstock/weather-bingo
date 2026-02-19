@@ -22,6 +22,7 @@ const mockForecast = (time: string, tempC: number): ForecastResponse => ({
     temperature_percentile_10_c: tempC - 3,
     temperature_percentile_90_c: tempC + 2,
     feels_like_c: tempC - 5,
+    snow_temperature_c: Math.min(tempC - 1, 0),
     wind_speed_ms: 3.2,
     wind_speed_percentile_10_ms: 1.5,
     wind_speed_percentile_90_ms: 5.0,

@@ -31,6 +31,8 @@ export interface ForecastWeather {
   temperature_percentile_10_c: number | null;
   temperature_percentile_90_c: number | null;
   feels_like_c: number;
+  /** Estimated snow surface temperature in Celsius (for wax selection) */
+  snow_temperature_c: number;
   wind_speed_ms: number;
   wind_speed_percentile_10_ms: number | null;
   wind_speed_percentile_90_ms: number | null;

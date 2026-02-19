@@ -44,6 +44,7 @@ pub struct ForecastWithIdx {
     pub symbol_code: Option<String>,
     pub feels_like_c: Option<Decimal>,
     pub precipitation_type: Option<String>,
+    pub snow_temperature_c: Option<Decimal>,
     pub yr_model_run_at: Option<DateTime<Utc>>,
     pub created_at: Option<DateTime<Utc>>,
 }
@@ -76,6 +77,7 @@ impl ForecastWithIdx {
             symbol_code: self.symbol_code?,
             feels_like_c: self.feels_like_c?,
             precipitation_type: self.precipitation_type?,
+            snow_temperature_c: self.snow_temperature_c,
             yr_model_run_at: self.yr_model_run_at,
             created_at: self.created_at?,
         })
@@ -119,6 +121,7 @@ pub struct InsertForecastParams {
     pub symbol_code: String,
     pub feels_like_c: Decimal,
     pub precipitation_type: String,
+    pub snow_temperature_c: Decimal,
     pub yr_model_run_at: Option<DateTime<Utc>>,
 }
 
@@ -280,7 +283,7 @@ pub async fn get_latest_forecast(
                 wind_direction_deg, wind_gust_ms,
                 precipitation_mm, precipitation_min_mm, precipitation_max_mm,
                 humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-                feels_like_c, precipitation_type, yr_model_run_at, created_at
+                feels_like_c, precipitation_type, snow_temperature_c, yr_model_run_at, created_at
          FROM forecasts
          WHERE checkpoint_id = $1
            AND forecast_time BETWEEN $2 - INTERVAL '{h} hours' AND $2 + INTERVAL '{h} hours'
@@ -321,7 +324,7 @@ pub async fn get_latest_forecasts_batch(
             f.wind_direction_deg, f.wind_gust_ms,
             f.precipitation_mm, f.precipitation_min_mm, f.precipitation_max_mm,
             f.humidity_pct, f.dew_point_c, f.cloud_cover_pct, f.uv_index, f.symbol_code,
-            f.feels_like_c, f.precipitation_type, f.yr_model_run_at, f.created_at
+            f.feels_like_c, f.precipitation_type, f.snow_temperature_c, f.yr_model_run_at, f.created_at
          FROM UNNEST($1::uuid[], $2::timestamptz[])
               WITH ORDINALITY AS p(cp_id, ft, idx)
          LEFT JOIN LATERAL (
@@ -382,7 +385,7 @@ pub async fn get_forecast_history(
                 wind_direction_deg, wind_gust_ms,
                 precipitation_mm, precipitation_min_mm, precipitation_max_mm,
                 humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-                feels_like_c, precipitation_type, yr_model_run_at, created_at
+                feels_like_c, precipitation_type, snow_temperature_c, yr_model_run_at, created_at
          FROM forecasts
          WHERE checkpoint_id = $1
            AND forecast_time = (
@@ -428,12 +431,12 @@ pub async fn insert_forecast(
             wind_direction_deg, wind_gust_ms,
             precipitation_mm, precipitation_min_mm, precipitation_max_mm,
             humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-            feels_like_c, precipitation_type, yr_model_run_at
+            feels_like_c, precipitation_type, snow_temperature_c, yr_model_run_at
          ) VALUES (
             gen_random_uuid(), $1, $2, $3, $4,
             $5, $6, $7, $8, $9, $10, $11, $12,
             $13, $14, $15, $16, $17, $18, $19, $20,
-            $21, $22, $23
+            $21, $22, $23, $24
          )
          ON CONFLICT (checkpoint_id, forecast_time, yr_model_run_at)
             WHERE yr_model_run_at IS NOT NULL
@@ -444,7 +447,7 @@ pub async fn insert_forecast(
                    wind_direction_deg, wind_gust_ms,
                    precipitation_mm, precipitation_min_mm, precipitation_max_mm,
                    humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-                   feels_like_c, precipitation_type, yr_model_run_at, created_at"
+                   feels_like_c, precipitation_type, snow_temperature_c, yr_model_run_at, created_at"
     } else {
         "INSERT INTO forecasts (
             id, checkpoint_id, forecast_time, fetched_at, source,
@@ -453,12 +456,12 @@ pub async fn insert_forecast(
             wind_direction_deg, wind_gust_ms,
             precipitation_mm, precipitation_min_mm, precipitation_max_mm,
             humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-            feels_like_c, precipitation_type, yr_model_run_at
+            feels_like_c, precipitation_type, snow_temperature_c, yr_model_run_at
          ) VALUES (
             gen_random_uuid(), $1, $2, $3, $4,
             $5, $6, $7, $8, $9, $10, $11, $12,
             $13, $14, $15, $16, $17, $18, $19, $20,
-            $21, $22, $23
+            $21, $22, $23, $24
          )
          ON CONFLICT (checkpoint_id, forecast_time)
             WHERE yr_model_run_at IS NULL
@@ -469,7 +472,7 @@ pub async fn insert_forecast(
                    wind_direction_deg, wind_gust_ms,
                    precipitation_mm, precipitation_min_mm, precipitation_max_mm,
                    humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-                   feels_like_c, precipitation_type, yr_model_run_at, created_at"
+                   feels_like_c, precipitation_type, snow_temperature_c, yr_model_run_at, created_at"
     };
 
     sqlx::query_as::<_, Forecast>(sql)
@@ -495,6 +498,7 @@ pub async fn insert_forecast(
         .bind(&p.symbol_code)
         .bind(p.feels_like_c)
         .bind(&p.precipitation_type)
+        .bind(p.snow_temperature_c)
         .bind(p.yr_model_run_at)
         .fetch_optional(pool)
         .await
