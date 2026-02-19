@@ -75,6 +75,9 @@ pub struct Forecast {
     // Calculated by API
     pub feels_like_c: Decimal,
     pub precipitation_type: String,
+    /// Estimated snow surface temperature in °C (calculated from air temp, cloud cover, wind).
+    /// NULL for rows created before this column was added.
+    pub snow_temperature_c: Option<Decimal>,
 
     /// When yr.no's weather model generated this forecast.
     /// NULL for rows created before this column was added.

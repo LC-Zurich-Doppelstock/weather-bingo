@@ -66,6 +66,8 @@ pub struct Weather {
     pub temperature_percentile_90_c: Option<f64>,
     /// Feels-like temperature (wind chill adjusted) in Celsius
     pub feels_like_c: f64,
+    /// Estimated snow surface temperature in Celsius (for wax selection)
+    pub snow_temperature_c: f64,
     /// Wind speed in metres per second
     pub wind_speed_ms: f64,
     /// 10th percentile wind speed
@@ -112,6 +114,7 @@ impl Weather {
             temperature_percentile_10_c: f.temperature_percentile_10_c.and_then(|v| v.to_f64()),
             temperature_percentile_90_c: f.temperature_percentile_90_c.and_then(|v| v.to_f64()),
             feels_like_c: f.feels_like_c.to_f64().unwrap_or(0.0),
+            snow_temperature_c: f.snow_temperature_c.and_then(|v| v.to_f64()).unwrap_or(0.0),
             wind_speed_ms: f.wind_speed_ms.to_f64().unwrap_or(0.0),
             wind_speed_percentile_10_ms: f.wind_speed_percentile_10_ms.and_then(|v| v.to_f64()),
             wind_speed_percentile_90_ms: f.wind_speed_percentile_90_ms.and_then(|v| v.to_f64()),
@@ -137,6 +140,7 @@ impl Weather {
             temperature_percentile_10_c: f.temperature_percentile_10_c.and_then(|v| v.to_f64()),
             temperature_percentile_90_c: f.temperature_percentile_90_c.and_then(|v| v.to_f64()),
             feels_like_c: f.feels_like_c.to_f64().unwrap_or(0.0),
+            snow_temperature_c: f.snow_temperature_c.and_then(|v| v.to_f64()).unwrap_or(0.0),
             wind_speed_ms: f.wind_speed_ms.to_f64().unwrap_or(0.0),
             wind_speed_percentile_10_ms: f.wind_speed_percentile_10_ms.and_then(|v| v.to_f64()),
             wind_speed_percentile_90_ms: f.wind_speed_percentile_90_ms.and_then(|v| v.to_f64()),

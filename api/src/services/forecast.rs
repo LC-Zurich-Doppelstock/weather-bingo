@@ -44,6 +44,40 @@ pub fn calculate_feels_like(temperature_c: f64, wind_speed_ms: f64) -> f64 {
     13.12 + 0.6215 * temperature_c - 11.37 * v016 + 0.3965 * temperature_c * v016
 }
 
+/// Estimate snow surface temperature for cross-country skiing wax selection.
+///
+/// Uses a dew-point-based approach grounded in published research:
+/// - Raleigh et al. (2013), "Approximating snow surface temperature from standard
+///   temperature and humidity data", *Water Resources Research*, found that dew point
+///   temperature is the single best simple predictor of snow surface temperature.
+/// - Pomeroy, Essery & Helgason (2016), "Aerodynamic and radiative controls on the
+///   snow surface temperature", *Journal of Hydrometeorology*, showed SST sensitivity
+///   to humidity, ventilation, and longwave irradiance.
+///
+/// The base temperature is `min(T_air, T_dew)`, which captures humidity-driven
+/// cooling (dry air → lower dew point → colder snow). An additional radiative
+/// offset accounts for clear-sky longwave cooling, damped by wind (turbulent mixing).
+///
+/// - Clear, calm conditions: snow can be up to 3°C colder than the base temperature
+/// - Overcast skies and wind reduce the offset
+/// - Result is clamped to ≤ 0°C (snow cannot exceed its melting point)
+///
+/// Formula: T_snow = min(T_base − offset, 0.0)
+///   where T_base = min(T_air, T_dew)
+///         offset = (1 − cloud_fraction) × 3.0 × 1/(1 + wind/5)
+pub fn calculate_snow_temperature(
+    temperature_c: f64,
+    dew_point_c: f64,
+    cloud_cover_pct: f64,
+    wind_speed_ms: f64,
+) -> f64 {
+    let t_base = temperature_c.min(dew_point_c);
+    let cloud_factor = 1.0 - (cloud_cover_pct / 100.0).clamp(0.0, 1.0);
+    let wind_damping = 1.0 / (1.0 + wind_speed_ms / 5.0);
+    let radiative_offset = cloud_factor * 3.0 * wind_damping;
+    (t_base - radiative_offset).min(0.0)
+}
+
 /// Infer precipitation type from yr.no symbol_code and temperature.
 ///
 /// Primary: parse from symbol_code string (contains "snow", "rain", "sleet").
@@ -347,6 +381,11 @@ fn build_single_insert_params(
     let precip_type = infer_precipitation_type(&parsed.symbol_code, temp_c, precip_mm);
     let feels_like_dec = Decimal::from_str(&format!("{:.1}", feels_like)).unwrap_or_default();
 
+    let cloud_pct = parsed.cloud_cover_pct.to_f64().unwrap_or(0.0);
+    let dew_point = parsed.dew_point_c.to_f64().unwrap_or(temp_c);
+    let snow_temp = calculate_snow_temperature(temp_c, dew_point, cloud_pct, wind_ms);
+    let snow_temp_dec = Decimal::from_str(&format!("{:.1}", snow_temp)).unwrap_or_default();
+
     InsertForecastParams {
         checkpoint_id,
         forecast_time: parsed.forecast_time,
@@ -370,6 +409,7 @@ fn build_single_insert_params(
         symbol_code: parsed.symbol_code.clone(),
         feels_like_c: feels_like_dec,
         precipitation_type: precip_type,
+        snow_temperature_c: snow_temp_dec,
         yr_model_run_at: parsed.yr_model_run_at,
     }
 }
@@ -995,6 +1035,16 @@ mod tests {
 
         // Precipitation type: symbol_code "lightsnow" → "snow"
         assert_eq!(params.precipitation_type, "snow");
+
+        // Snow temperature: -5°C air, -8.5°C dew point, 50% cloud, 3.2 m/s wind
+        // T_base = min(-5, -8.5) = -8.5, cloud_factor = 0.5, wind_damping = 1/(1+3.2/5) ≈ 0.6098
+        // offset = 0.5 * 3.0 * 0.6098 ≈ 0.915, T_snow = min(-8.5 - 0.915, 0) ≈ -9.4
+        let snow_temp_f64 = params.snow_temperature_c.to_f64().unwrap();
+        assert!(
+            (snow_temp_f64 - (-9.4)).abs() < 0.2,
+            "Snow temp should be ~-9.4 (dew point lowers base), got {}",
+            snow_temp_f64
+        );
     }
 
     #[test]
@@ -1049,6 +1099,16 @@ mod tests {
             (feels_like_f64 - 2.0).abs() < 0.1,
             "Warm + no wind: feels_like should equal temperature, got {}",
             feels_like_f64
+        );
+
+        // Snow temperature: 2°C air, -2°C dew point, clear sky (0% cloud), calm wind (0.5 m/s)
+        // T_base = min(2, -2) = -2, offset = 1.0 × 3.0 × 1/(1+0.5/5) = 3.0/1.1 ≈ 2.727
+        // T_snow = min(-2 - 2.727, 0) ≈ -4.7
+        let snow_temp_f64 = params.snow_temperature_c.to_f64().unwrap();
+        assert!(
+            (snow_temp_f64 - (-4.7)).abs() < 0.2,
+            "Clear sky + low dew point: snow temp should be ~-4.7, got {}",
+            snow_temp_f64
         );
     }
 
@@ -1125,6 +1185,16 @@ mod tests {
         );
 
         assert_eq!(params.precipitation_type, "snow");
+
+        // Snow temperature: -8°C air, -9.5°C dew point, 100% cloud, 5 m/s wind
+        // T_base = min(-8, -9.5) = -9.5, cloud_factor = 0.0 → offset = 0.0
+        // T_snow = min(-9.5, 0) = -9.5
+        let snow_temp_f64 = params.snow_temperature_c.to_f64().unwrap();
+        assert!(
+            (snow_temp_f64 - (-9.5)).abs() < 0.1,
+            "100% cloud: snow temp should ≈ T_base (dew point), got {}",
+            snow_temp_f64
+        );
     }
 
     #[test]
@@ -1313,6 +1383,94 @@ mod tests {
             (fractions[1] - 7.0 / 8.0).abs() < 1e-10,
             "Expected 7/8 for steep uphill, got {}",
             fractions[1]
+        );
+    }
+
+    // --- Snow temperature tests ---
+
+    #[test]
+    fn test_snow_temp_overcast_windy() {
+        // 100% cloud, 5 m/s wind → minimal offset, snow ≈ air temp
+        // T_base = min(-5, -5) = -5, offset = 0 (cloud_factor=0), T_snow = -5.0
+        let result = calculate_snow_temperature(-5.0, -5.0, 100.0, 5.0);
+        assert!(
+            (result - (-5.0)).abs() < 0.01,
+            "Overcast + windy: snow temp should ≈ air temp, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_snow_temp_clear_calm() {
+        // 0% cloud, 0 m/s wind → maximum offset of 3°C
+        // T_base = min(-5, -5) = -5, offset = 3.0, T_snow = -8.0
+        let result = calculate_snow_temperature(-5.0, -5.0, 0.0, 0.0);
+        assert!(
+            (result - (-8.0)).abs() < 0.01,
+            "Clear + calm: snow temp should be T_base - 3, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_snow_temp_clear_windy() {
+        // 0% cloud, 10 m/s wind → wind damps the offset
+        // T_base = min(-5, -5) = -5, offset = 1.0 * 3.0 * 1/(1+10/5) = 3.0 * 1/3 = 1.0
+        let result = calculate_snow_temperature(-5.0, -5.0, 0.0, 10.0);
+        let expected = -5.0 - 1.0;
+        assert!(
+            (result - expected).abs() < 0.01,
+            "Clear + windy: expected {:.2}, got {:.2}",
+            expected,
+            result
+        );
+    }
+
+    #[test]
+    fn test_snow_temp_warm_air_clamped() {
+        // Air temp 5°C, dew point 5°C → result clamped to 0°C
+        let result = calculate_snow_temperature(5.0, 5.0, 50.0, 2.0);
+        assert!(
+            (result - 0.0).abs() < 0.01,
+            "Warm air: snow temp should be clamped to 0, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_snow_temp_very_cold() {
+        // -20°C, clear, calm → T_base - 3.0 = -23°C
+        let result = calculate_snow_temperature(-20.0, -20.0, 0.0, 0.0);
+        assert!(
+            (result - (-23.0)).abs() < 0.01,
+            "Very cold + clear + calm: expected -23, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_snow_temp_partial_cloud() {
+        // -10°C, 50% cloud, 0 m/s wind → offset = 0.5 * 3.0 * 1.0 = 1.5
+        let result = calculate_snow_temperature(-10.0, -10.0, 50.0, 0.0);
+        assert!(
+            (result - (-11.5)).abs() < 0.01,
+            "Partial cloud: expected -11.5, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_snow_temp_dew_point_depression() {
+        // T_air = -5°C, T_dew = -10°C (dry air → lower dew point → colder base)
+        // T_base = min(-5, -10) = -10, offset = 0.5 * 3.0 * 1/(1+2/5) = 1.5 * 1/1.4 ≈ 1.0714
+        // T_snow = -10 - 1.0714 ≈ -11.07
+        let result = calculate_snow_temperature(-5.0, -10.0, 50.0, 2.0);
+        let expected = -10.0 - (0.5 * 3.0 / 1.4);
+        assert!(
+            (result - expected).abs() < 0.01,
+            "Dew point depression: expected {:.2}, got {:.2}",
+            expected,
+            result
         );
     }
 

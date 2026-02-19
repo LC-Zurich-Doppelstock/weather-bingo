@@ -52,6 +52,7 @@ interface ChartDataPoint {
   tempP90: number | null;
   tempRange: [number, number] | null;
   feelsLike: number;
+  snowTemperature: number;
   wind: number;
   windP10: number | null;
   windP90: number | null;
@@ -122,6 +123,7 @@ const CourseOverview = memo(function CourseOverview({
               ? [w.temperature_percentile_10_c, w.temperature_percentile_90_c] as [number, number]
               : null,
           feelsLike: w.feels_like_c,
+          snowTemperature: w.snow_temperature_c,
           wind: w.wind_speed_ms,
           windP10: w.wind_speed_percentile_10_ms ?? null,
           windP90: w.wind_speed_percentile_90_ms ?? null,
@@ -298,6 +300,15 @@ const CourseOverview = memo(function CourseOverview({
               dot={false}
               opacity={uncertaintyOpacity * 4}
               name="Feels like"
+            />
+            <Line
+              type="monotone"
+              dataKey="snowTemperature"
+              stroke={chartColors.snowTemperature}
+              strokeWidth={1.5}
+              strokeDasharray="4 2"
+              dot={false}
+              name="Snow temp"
             />
             <Line
               type="monotone"

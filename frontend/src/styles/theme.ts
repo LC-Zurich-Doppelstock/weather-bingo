@@ -32,6 +32,7 @@ export const chartColors = {
   humidity: "#34EBB9",
   cloudCover: "#5A7A6E",
   elevation: "#D4687A",
+  snowTemperature: "#88C8E8",
 } as const;
 
 // Uncertainty bands use same colour at 15% opacity
