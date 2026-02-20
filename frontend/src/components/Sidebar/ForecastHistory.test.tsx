@@ -23,17 +23,6 @@ vi.mock("recharts", () => ({
       {children}
     </div>
   ),
-  BarChart: ({
-    children,
-    data,
-  }: {
-    children: React.ReactNode;
-    data?: unknown[];
-  }) => (
-    <div data-testid="BarChart" data-points={data?.length ?? 0}>
-      {children}
-    </div>
-  ),
   Line: () => null,
   Area: () => null,
   Bar: () => null,
@@ -130,11 +119,10 @@ describe("ForecastHistory", () => {
 
     expect(button).toHaveAttribute("aria-expanded", "true");
 
-    // Wait for charts to appear
+    // Wait for charts to appear (temp + precip + wind = 3 ComposedCharts)
     await waitFor(() => {
-      expect(screen.getAllByTestId("ComposedChart")).toHaveLength(2); // temp + wind
+      expect(screen.getAllByTestId("ComposedChart")).toHaveLength(3);
     });
-    expect(screen.getByTestId("BarChart")).toBeInTheDocument(); // precipitation
   });
 
   it("shows model run count after loading", async () => {
@@ -267,11 +255,11 @@ describe("ForecastHistory", () => {
 
     await waitFor(() => {
       const composedCharts = screen.getAllByTestId("ComposedChart");
+      expect(composedCharts).toHaveLength(3);
       expect(composedCharts[0]).toHaveAttribute("data-points", "5");
+      expect(composedCharts[1]).toHaveAttribute("data-points", "5"); // precipitation
+      expect(composedCharts[2]).toHaveAttribute("data-points", "5"); // wind
     });
-
-    const barChart = screen.getByTestId("BarChart");
-    expect(barChart).toHaveAttribute("data-points", "5");
   });
 
   it("handles null yr_model_run_at (pre-poller rows)", async () => {
