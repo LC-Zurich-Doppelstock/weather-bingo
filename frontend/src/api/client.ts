@@ -9,6 +9,7 @@ import type {
   Checkpoint,
   ForecastResponse,
   RaceForecastResponse,
+  ForecastHistoryResponse,
 } from "./types";
 
 const BASE_URL = "/api/v1";
@@ -113,5 +114,15 @@ export function fetchRaceForecastWithStale(
 ): Promise<ApiResponse<RaceForecastResponse>> {
   return fetchJsonWithStale<RaceForecastResponse>(
     `${BASE_URL}/forecasts/race/${raceId}?target_duration_hours=${targetDurationHours}`
+  );
+}
+
+/** Get forecast history for a checkpoint at a specific time (one entry per model run). */
+export function fetchForecastHistory(
+  checkpointId: string,
+  datetime: string
+): Promise<ForecastHistoryResponse> {
+  return fetchJson<ForecastHistoryResponse>(
+    `${BASE_URL}/forecasts/checkpoint/${checkpointId}/history?datetime=${encodeURIComponent(datetime)}`
   );
 }

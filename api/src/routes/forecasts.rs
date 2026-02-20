@@ -201,6 +201,9 @@ pub struct ForecastHistoryEntry {
     /// When yr.no's weather model generated this forecast (ISO 8601).
     /// Null for older rows that predate this tracking.
     pub yr_model_run_at: Option<String>,
+    /// Effective model run time: yr_model_run_at if available, otherwise fetched_at.
+    /// Always populated — use this as the X-axis value in history charts.
+    pub model_run_at: String,
     /// Weather data at this fetch time
     pub weather: Weather,
 }
@@ -372,10 +375,14 @@ pub async fn get_checkpoint_forecast_history(
 
     let history: Vec<ForecastHistoryEntry> = forecasts
         .iter()
-        .map(|f| ForecastHistoryEntry {
-            fetched_at: f.fetched_at.to_rfc3339(),
-            yr_model_run_at: f.yr_model_run_at.map(|dt| dt.to_rfc3339()),
-            weather: Weather::full(f),
+        .map(|f| {
+            let model_run_at = f.yr_model_run_at.unwrap_or(f.fetched_at).to_rfc3339();
+            ForecastHistoryEntry {
+                fetched_at: f.fetched_at.to_rfc3339(),
+                yr_model_run_at: f.yr_model_run_at.map(|dt| dt.to_rfc3339()),
+                model_run_at,
+                weather: Weather::full(f),
+            }
         })
         .collect();
 
