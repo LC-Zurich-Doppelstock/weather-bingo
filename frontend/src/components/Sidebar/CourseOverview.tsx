@@ -13,20 +13,9 @@ import {
 } from "recharts";
 import type { CategoricalChartState } from "recharts/types/chart/types";
 import type { Checkpoint, RaceForecastResponse } from "../../api/types";
-import { chartColors, colors, uncertaintyOpacity } from "../../styles/theme";
+import { chartColors, colors, uncertaintyOpacity, secondaryLineOpacity } from "../../styles/theme";
+import { tooltipStyle, tickStyle, axisLineStyle } from "../../styles/chartStyles";
 import { formatTemp, formatWind, formatPrecip, windDirectionLabel, formatTimeWithZone, formatDate, formatCheckBackMessage } from "../../utils/formatting";
-
-// Static style objects hoisted outside the component to avoid recreation on every render
-const tooltipStyle = {
-  backgroundColor: colors.surface,
-  border: `1px solid ${colors.border}`,
-  borderRadius: "6px",
-  color: colors.textPrimary,
-  fontSize: "12px",
-} as const;
-
-const tickStyle = { fill: colors.textMuted, fontSize: 10 } as const;
-const axisLineStyle = { stroke: colors.border } as const;
 
 interface CourseOverviewProps {
   /** Race forecast data for all checkpoints. */
@@ -298,7 +287,7 @@ const CourseOverview = memo(function CourseOverview({
               strokeWidth={1.5}
               strokeDasharray="4 2"
               dot={false}
-              opacity={uncertaintyOpacity * 4}
+              opacity={secondaryLineOpacity}
               name="Feels like"
             />
             <Line

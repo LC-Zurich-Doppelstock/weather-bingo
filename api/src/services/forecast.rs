@@ -12,15 +12,14 @@
 //! If-Modified-Since enables conditional requests.
 
 use chrono::{DateTime, Duration, Utc};
-use rust_decimal::prelude::ToPrimitive;
-use rust_decimal::Decimal;
+use futures::stream::{self, StreamExt};
 use sqlx::PgPool;
-use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::db::models::{Checkpoint, Forecast};
 use crate::db::queries::{self, InsertForecastParams};
 use crate::errors::AppError;
+use crate::helpers::{dec_to_f64, f64_to_decimal_1dp};
 use crate::services::yr::{
     extract_forecasts_at_times, parse_expires_header, ExtractionResult, YrClient, YrParsedForecast,
     YrTimeseriesResult,
@@ -86,31 +85,31 @@ pub fn infer_precipitation_type(
     symbol_code: &str,
     temperature_c: f64,
     precipitation_mm: f64,
-) -> String {
+) -> &'static str {
     if precipitation_mm <= 0.0 {
-        return "none".to_string();
+        return "none";
     }
 
     let code_lower = symbol_code.to_lowercase();
 
     // Check symbol_code first
     if code_lower.contains("snow") {
-        return "snow".to_string();
+        return "snow";
     }
     if code_lower.contains("sleet") {
-        return "sleet".to_string();
+        return "sleet";
     }
     if code_lower.contains("rain") || code_lower.contains("drizzle") {
-        return "rain".to_string();
+        return "rain";
     }
 
     // Temperature-based fallback
     if temperature_c < 0.0 {
-        "snow".to_string()
+        "snow"
     } else if temperature_c <= 2.0 {
-        "sleet".to_string()
+        "sleet"
     } else {
-        "rain".to_string()
+        "rain"
     }
 }
 
@@ -248,7 +247,7 @@ pub fn calculate_pass_time_weighted(
 /// This fixes the cache-valid-but-no-extracted-forecast bug: previously, when the
 /// cache was still valid, the old function returned immediately without extracting
 /// forecasts for new checkpoints at already-cached locations.
-async fn ensure_yr_cache_fresh(
+pub(crate) async fn ensure_yr_cache_fresh(
     pool: &PgPool,
     yr_client: &YrClient,
     checkpoint: &Checkpoint,
@@ -264,30 +263,9 @@ async fn ensure_yr_cache_fresh(
     let existing = queries::get_yr_cached_response_any(pool, checkpoint_id).await?;
     let if_modified_since = existing.as_ref().and_then(|c| c.last_modified.as_deref());
 
-    let lat = checkpoint.latitude.to_f64().unwrap_or_else(|| {
-        tracing::warn!(
-            "Checkpoint {} has non-representable latitude {:?}, defaulting to 0.0",
-            checkpoint.id,
-            checkpoint.latitude,
-        );
-        0.0
-    });
-    let lon = checkpoint.longitude.to_f64().unwrap_or_else(|| {
-        tracing::warn!(
-            "Checkpoint {} has non-representable longitude {:?}, defaulting to 0.0",
-            checkpoint.id,
-            checkpoint.longitude,
-        );
-        0.0
-    });
-    let alt = checkpoint.elevation_m.to_f64().unwrap_or_else(|| {
-        tracing::warn!(
-            "Checkpoint {} has non-representable elevation {:?}, defaulting to 0.0",
-            checkpoint.id,
-            checkpoint.elevation_m,
-        );
-        0.0
-    });
+    let lat = dec_to_f64(checkpoint.latitude);
+    let lon = dec_to_f64(checkpoint.longitude);
+    let alt = dec_to_f64(checkpoint.elevation_m);
 
     match yr_client
         .fetch_timeseries(lat, lon, alt, if_modified_since)
@@ -347,44 +325,23 @@ async fn ensure_yr_cache_fresh(
 }
 
 /// Build `InsertForecastParams` for a single parsed yr.no entry for a checkpoint.
-fn build_single_insert_params(
+pub(crate) fn build_single_insert_params(
     checkpoint_id: Uuid,
     parsed: &YrParsedForecast,
     fetched_at: DateTime<Utc>,
 ) -> InsertForecastParams {
-    let temp_c = parsed.temperature_c.to_f64().unwrap_or_else(|| {
-        tracing::warn!(
-            "Forecast at {} has non-representable temperature_c {:?}, defaulting to 0.0",
-            parsed.forecast_time,
-            parsed.temperature_c,
-        );
-        0.0
-    });
-    let wind_ms = parsed.wind_speed_ms.to_f64().unwrap_or_else(|| {
-        tracing::warn!(
-            "Forecast at {} has non-representable wind_speed_ms {:?}, defaulting to 0.0",
-            parsed.forecast_time,
-            parsed.wind_speed_ms,
-        );
-        0.0
-    });
-    let precip_mm = parsed.precipitation_mm.to_f64().unwrap_or_else(|| {
-        tracing::warn!(
-            "Forecast at {} has non-representable precipitation_mm {:?}, defaulting to 0.0",
-            parsed.forecast_time,
-            parsed.precipitation_mm,
-        );
-        0.0
-    });
+    let temp_c = dec_to_f64(parsed.temperature_c);
+    let wind_ms = dec_to_f64(parsed.wind_speed_ms);
+    let precip_mm = dec_to_f64(parsed.precipitation_mm);
 
     let feels_like = calculate_feels_like(temp_c, wind_ms);
     let precip_type = infer_precipitation_type(&parsed.symbol_code, temp_c, precip_mm);
-    let feels_like_dec = Decimal::from_str(&format!("{:.1}", feels_like)).unwrap_or_default();
+    let feels_like_dec = f64_to_decimal_1dp(feels_like);
 
-    let cloud_pct = parsed.cloud_cover_pct.to_f64().unwrap_or(0.0);
-    let dew_point = parsed.dew_point_c.to_f64().unwrap_or(temp_c);
+    let cloud_pct = dec_to_f64(parsed.cloud_cover_pct);
+    let dew_point = dec_to_f64(parsed.dew_point_c);
     let snow_temp = calculate_snow_temperature(temp_c, dew_point, cloud_pct, wind_ms);
-    let snow_temp_dec = Decimal::from_str(&format!("{:.1}", snow_temp)).unwrap_or_default();
+    let snow_temp_dec = f64_to_decimal_1dp(snow_temp);
 
     InsertForecastParams {
         checkpoint_id,
@@ -408,7 +365,7 @@ fn build_single_insert_params(
         uv_index: parsed.uv_index,
         symbol_code: parsed.symbol_code.clone(),
         feels_like_c: feels_like_dec,
-        precipitation_type: precip_type,
+        precipitation_type: precip_type.to_string(),
         snow_temperature_c: snow_temp_dec,
         yr_model_run_at: parsed.yr_model_run_at,
     }
@@ -507,8 +464,31 @@ pub async fn resolve_race_forecasts(
     let n = checkpoints.len();
 
     // ── Step 1: Ensure yr.no cache fresh for each checkpoint (bounded parallel) ──
-    // Limit concurrency to avoid overwhelming yr.no with simultaneous requests.
-    use futures::stream::{self, StreamExt};
+    let fetch_results = fetch_yr_caches(pool, yr_client, checkpoints).await;
+
+    // ── Step 2: Handle results, falling back to DB cache on error ──
+    let pairs: Vec<(Uuid, DateTime<Utc>)> = checkpoints
+        .iter()
+        .map(|cpwt| (cpwt.checkpoint.id, cpwt.forecast_time))
+        .collect();
+    let cached_forecasts = queries::get_latest_forecasts_batch(pool, &pairs).await?;
+
+    let (results, horizons, insert_params) =
+        process_fetch_results(&fetch_results, checkpoints, &cached_forecasts, n)?;
+
+    // ── Step 2b: Batch-insert all forecast params concurrently ──
+    batch_insert_forecasts(pool, insert_params).await?;
+
+    // ── Step 3: Batch re-query DB for canonical Forecast rows ──
+    fill_requeried_forecasts(pool, checkpoints, results, &horizons).await
+}
+
+/// Fetch yr.no caches for all checkpoints with bounded concurrency.
+async fn fetch_yr_caches(
+    pool: &PgPool,
+    yr_client: &YrClient,
+    checkpoints: &[CheckpointWithTime],
+) -> Vec<Result<serde_json::Value, AppError>> {
     const MAX_CONCURRENT_YR_FETCHES: usize = 4;
 
     let futures: Vec<_> = checkpoints
@@ -521,51 +501,56 @@ pub async fn resolve_race_forecasts(
         })
         .collect();
 
-    let fetch_results: Vec<Result<serde_json::Value, AppError>> = stream::iter(futures)
+    stream::iter(futures)
         .buffer_unordered(MAX_CONCURRENT_YR_FETCHES)
         .collect()
-        .await;
+        .await
+}
 
-    // ── Step 2: Handle results, falling back to DB cache on error ──
-    // Pre-fetch cached forecasts for fallback (batch query)
-    let pairs: Vec<(Uuid, DateTime<Utc>)> = checkpoints
-        .iter()
-        .map(|cpwt| (cpwt.checkpoint.id, cpwt.forecast_time))
-        .collect();
-    let cached_forecasts = queries::get_latest_forecasts_batch(pool, &pairs).await?;
-
+/// Process yr.no fetch results: extract forecasts in-memory, fall back to DB cache on error.
+///
+/// Returns `(partial_results, horizons, insert_params)`. Entries in `partial_results`
+/// that are `None` still need a DB re-query for the canonical forecast row.
+#[allow(clippy::type_complexity)]
+fn process_fetch_results(
+    fetch_results: &[Result<serde_json::Value, AppError>],
+    checkpoints: &[CheckpointWithTime],
+    cached_forecasts: &[Option<Forecast>],
+    n: usize,
+) -> Result<
+    (
+        Vec<Option<ResolvedForecast>>,
+        Vec<Option<DateTime<Utc>>>,
+        Vec<InsertForecastParams>,
+    ),
+    AppError,
+> {
     let mut results: Vec<Option<ResolvedForecast>> = vec![None; n];
     let mut horizons: Vec<Option<DateTime<Utc>>> = vec![None; n];
-    // Collect insert params for batch DB write (issue #7: avoid sequential inserts)
     let mut insert_params: Vec<InsertForecastParams> = Vec::new();
 
-    for (idx, fetch_result) in fetch_results.into_iter().enumerate() {
+    for (idx, fetch_result) in fetch_results.iter().enumerate() {
         match fetch_result {
             Ok(raw_json) => {
-                // Extract forecast from cached JSON in-memory
                 let forecast_time = checkpoints[idx].forecast_time;
                 let ExtractionResult {
                     forecasts: parsed,
                     forecast_horizon,
-                } = extract_forecasts_at_times(raw_json, &[forecast_time])?;
+                } = extract_forecasts_at_times(raw_json.clone(), &[forecast_time])?;
                 let maybe_parsed = parsed.into_iter().next().flatten();
 
                 match maybe_parsed {
                     Some(ref forecast_data) => {
-                        // Collect params for concurrent insert below
                         let params = build_single_insert_params(
                             checkpoints[idx].checkpoint.id,
                             forecast_data,
                             Utc::now(),
                         );
                         insert_params.push(params);
-
-                        // Store horizon, mark for batch re-query below
                         results[idx] = None; // will be filled by batch re-query
                         horizons[idx] = Some(forecast_horizon);
                     }
                     None => {
-                        // Beyond yr.no horizon — no forecast available
                         results[idx] = Some(ResolvedForecast {
                             forecast: None,
                             is_stale: false,
@@ -575,7 +560,6 @@ pub async fn resolve_race_forecasts(
                 }
             }
             Err(e) => {
-                // yr.no failed for this checkpoint — fall back to cached forecast
                 if let Some(cached) = cached_forecasts[idx].clone() {
                     tracing::warn!(
                         "yr.no unavailable for checkpoint {}, will use stale DB data: {}",
@@ -597,7 +581,14 @@ pub async fn resolve_race_forecasts(
         }
     }
 
-    // ── Step 2b: Batch-insert all forecast params concurrently ──
+    Ok((results, horizons, insert_params))
+}
+
+/// Batch-insert forecast params concurrently.
+async fn batch_insert_forecasts(
+    pool: &PgPool,
+    insert_params: Vec<InsertForecastParams>,
+) -> Result<(), AppError> {
     let insert_futures: Vec<_> = insert_params
         .into_iter()
         .map(|params| queries::insert_forecast(pool, params))
@@ -606,9 +597,16 @@ pub async fn resolve_race_forecasts(
     for result in insert_results {
         let _ = result?;
     }
+    Ok(())
+}
 
-    // ── Step 3: Batch re-query DB for canonical Forecast rows ──
-    // Collect indices that need re-query (successfully extracted, not stale fallback)
+/// Re-query DB for canonical forecast rows where extraction succeeded.
+async fn fill_requeried_forecasts(
+    pool: &PgPool,
+    checkpoints: &[CheckpointWithTime],
+    mut results: Vec<Option<ResolvedForecast>>,
+    horizons: &[Option<DateTime<Utc>>],
+) -> Result<Vec<ResolvedForecast>, AppError> {
     let requery_pairs: Vec<(Uuid, DateTime<Utc>)> = results
         .iter()
         .enumerate()
@@ -624,7 +622,6 @@ pub async fn resolve_race_forecasts(
     let requeried = queries::get_latest_forecasts_batch(pool, &requery_pairs).await?;
 
     let mut requery_iter = requeried.into_iter();
-    let mut horizon_idx = 0;
     for (idx, result) in results.iter_mut().enumerate() {
         if result.is_none() {
             *result = Some(ResolvedForecast {
@@ -632,10 +629,8 @@ pub async fn resolve_race_forecasts(
                 is_stale: false,
                 forecast_horizon: horizons[idx],
             });
-            horizon_idx += 1;
         }
     }
-    let _ = horizon_idx; // suppress unused warning
 
     results
         .into_iter()
@@ -661,6 +656,8 @@ pub async fn get_checkpoint(pool: &PgPool, checkpoint_id: Uuid) -> Result<Checkp
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
 
     #[test]
     fn test_feels_like_cold_and_windy() {
@@ -1030,7 +1027,7 @@ mod tests {
         assert_eq!(params.yr_model_run_at, Some(model_run));
 
         // Feels-like should be computed (cold + wind -> colder)
-        let feels_like_f64 = params.feels_like_c.to_f64().unwrap();
+        let feels_like_f64 = dec_to_f64(params.feels_like_c);
         assert!(feels_like_f64 < -5.0, "Wind chill should lower feels_like");
 
         // Precipitation type: symbol_code "lightsnow" → "snow"
@@ -1039,7 +1036,7 @@ mod tests {
         // Snow temperature: -5°C air, -8.5°C dew point, 50% cloud, 3.2 m/s wind
         // T_base = min(-5, -8.5) = -8.5, cloud_factor = 0.5, wind_damping = 1/(1+3.2/5) ≈ 0.6098
         // offset = 0.5 * 3.0 * 0.6098 ≈ 0.915, T_snow = min(-8.5 - 0.915, 0) ≈ -9.4
-        let snow_temp_f64 = params.snow_temperature_c.to_f64().unwrap();
+        let snow_temp_f64 = dec_to_f64(params.snow_temperature_c);
         assert!(
             (snow_temp_f64 - (-9.4)).abs() < 0.2,
             "Snow temp should be ~-9.4 (dew point lowers base), got {}",
@@ -1094,7 +1091,7 @@ mod tests {
 
         // Warm temp (2°C) with very low wind (0.5 m/s = 1.8 km/h < 4.8)
         // -> no wind chill applied, feels_like equals temperature
-        let feels_like_f64 = params.feels_like_c.to_f64().unwrap();
+        let feels_like_f64 = dec_to_f64(params.feels_like_c);
         assert!(
             (feels_like_f64 - 2.0).abs() < 0.1,
             "Warm + no wind: feels_like should equal temperature, got {}",
@@ -1104,7 +1101,7 @@ mod tests {
         // Snow temperature: 2°C air, -2°C dew point, clear sky (0% cloud), calm wind (0.5 m/s)
         // T_base = min(2, -2) = -2, offset = 1.0 × 3.0 × 1/(1+0.5/5) = 3.0/1.1 ≈ 2.727
         // T_snow = min(-2 - 2.727, 0) ≈ -4.7
-        let snow_temp_f64 = params.snow_temperature_c.to_f64().unwrap();
+        let snow_temp_f64 = dec_to_f64(params.snow_temperature_c);
         assert!(
             (snow_temp_f64 - (-4.7)).abs() < 0.2,
             "Clear sky + low dew point: snow temp should be ~-4.7, got {}",
@@ -1177,7 +1174,7 @@ mod tests {
         assert_eq!(params.yr_model_run_at, Some(model_run));
 
         // Cold + windy -> wind chill should lower it significantly
-        let feels_like_f64 = params.feels_like_c.to_f64().unwrap();
+        let feels_like_f64 = dec_to_f64(params.feels_like_c);
         assert!(
             feels_like_f64 < -12.0,
             "-8°C + 5 m/s wind: feels_like should be well below -8, got {}",
@@ -1189,7 +1186,7 @@ mod tests {
         // Snow temperature: -8°C air, -9.5°C dew point, 100% cloud, 5 m/s wind
         // T_base = min(-8, -9.5) = -9.5, cloud_factor = 0.0 → offset = 0.0
         // T_snow = min(-9.5, 0) = -9.5
-        let snow_temp_f64 = params.snow_temperature_c.to_f64().unwrap();
+        let snow_temp_f64 = dec_to_f64(params.snow_temperature_c);
         assert!(
             (snow_temp_f64 - (-9.5)).abs() < 0.1,
             "100% cloud: snow temp should ≈ T_base (dew point), got {}",

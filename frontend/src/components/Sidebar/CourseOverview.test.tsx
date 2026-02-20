@@ -1,9 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import CourseOverview from "./CourseOverview";
-import type { Checkpoint, RaceForecastResponse } from "../../api/types";
+import {
+  mockCheckpoints,
+  mockRaceForecast,
+} from "../../test/fixtures";
 
-// Mock recharts to avoid canvas rendering issues in jsdom
+// Mock recharts to avoid canvas rendering issues in jsdom.
+// Factory must be self-contained (vi.mock is hoisted above imports).
 vi.mock("recharts", () => ({
   ResponsiveContainer: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="responsive-container">{children}</div>
@@ -23,79 +27,6 @@ vi.mock("recharts", () => ({
   ReferenceLine: () => null,
 }));
 
-const mockCheckpoints: Checkpoint[] = [
-  {
-    id: "cp-1",
-    name: "Salen",
-    distance_km: 0,
-    latitude: 61.16,
-    longitude: 13.27,
-    elevation_m: 400,
-    sort_order: 1,
-  },
-  {
-    id: "cp-2",
-    name: "Mangsbodarna",
-    distance_km: 24,
-    latitude: 61.12,
-    longitude: 13.68,
-    elevation_m: 520,
-    sort_order: 2,
-  },
-];
-
-const mockRaceForecast: RaceForecastResponse = {
-  race_id: "race-1",
-  race_name: "Vasaloppet",
-  target_duration_hours: 8,
-  yr_model_run_at: "2026-02-28T06:00:00Z",
-  forecast_horizon: "2026-03-09T12:00:00Z",
-  checkpoints: [
-    {
-      checkpoint_id: "cp-1",
-      name: "Salen",
-      distance_km: 0,
-      expected_time: "2026-03-01T07:00:00Z",
-      forecast_available: true,
-      weather: {
-        temperature_c: -5,
-        temperature_percentile_10_c: -8,
-        temperature_percentile_90_c: -2,
-        feels_like_c: -10,
-        snow_temperature_c: -7.3,
-        wind_speed_ms: 3.2,
-        wind_speed_percentile_10_ms: 1.5,
-        wind_speed_percentile_90_ms: 5.0,
-        wind_direction_deg: 180,
-        precipitation_mm: 0.5,
-        precipitation_type: "snow",
-        symbol_code: "heavysnow",
-      },
-    },
-    {
-      checkpoint_id: "cp-2",
-      name: "Mangsbodarna",
-      distance_km: 24,
-      expected_time: "2026-03-01T09:08:00Z",
-      forecast_available: true,
-      weather: {
-        temperature_c: -3,
-        temperature_percentile_10_c: -6,
-        temperature_percentile_90_c: -1,
-        feels_like_c: -7,
-        snow_temperature_c: -4.8,
-        wind_speed_ms: 2.5,
-        wind_speed_percentile_10_ms: 1.0,
-        wind_speed_percentile_90_ms: 4.0,
-        wind_direction_deg: 225,
-        precipitation_mm: 0.2,
-        precipitation_type: "snow",
-        symbol_code: "lightsnow",
-      },
-    },
-  ],
-};
-
 describe("CourseOverview", () => {
   it("renders loading skeletons when data is loading", () => {
     const { container } = render(
@@ -114,12 +45,12 @@ describe("CourseOverview", () => {
   });
 
   it("renders forecast-unavailable message when all checkpoints have no weather", () => {
-    const allUnavailable: RaceForecastResponse = {
+    const allUnavailable = {
       ...mockRaceForecast,
       forecast_horizon: "2026-02-25T18:00:00Z",
       checkpoints: mockRaceForecast.checkpoints.map((cp) => ({
         ...cp,
-        forecast_available: false,
+        forecast_available: false as const,
         weather: null,
       })),
     };
@@ -164,13 +95,13 @@ describe("CourseOverview", () => {
   });
 
   it("renders partial data warning when some checkpoints have unavailable forecasts", () => {
-    const partial: RaceForecastResponse = {
+    const partial = {
       ...mockRaceForecast,
       checkpoints: [
         mockRaceForecast.checkpoints[0]!,
         {
           ...mockRaceForecast.checkpoints[1]!,
-          forecast_available: false,
+          forecast_available: false as const,
           weather: null,
         },
       ],
@@ -206,7 +137,7 @@ describe("CourseOverview", () => {
   });
 
   it("shows no checkpoints message when checkpoints array is empty", () => {
-    const emptyForecast: RaceForecastResponse = {
+    const emptyForecast = {
       ...mockRaceForecast,
       checkpoints: [],
     };
