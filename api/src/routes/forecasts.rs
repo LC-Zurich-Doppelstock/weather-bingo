@@ -8,13 +8,16 @@ use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use chrono::{DateTime, Utc};
-use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::db::{models, queries};
 use crate::errors::{AppError, ErrorResponse};
+use crate::helpers::{dec_to_f64, opt_dec_to_f64};
+
+/// Maximum allowed value for `target_duration_hours` query parameter (3 days).
+const MAX_TARGET_DURATION_HOURS: f64 = 72.0;
 use crate::services::forecast::{
     calculate_pass_time_fractions, calculate_pass_time_weighted, get_checkpoint, resolve_forecast,
     resolve_race_forecasts, CheckpointWithTime, PacingCheckpoint,
@@ -23,9 +26,9 @@ use crate::services::yr::YrClient;
 
 /// Shared application state for forecast endpoints.
 #[derive(Clone)]
-pub struct AppState {
-    pub pool: sqlx::PgPool,
-    pub yr_client: YrClient,
+pub(crate) struct AppState {
+    pub(crate) pool: sqlx::PgPool,
+    pub(crate) yr_client: YrClient,
 }
 
 // ---------------------------------------------------------------------------
@@ -110,24 +113,24 @@ impl Weather {
     /// All fields populated — detail-only fields are `Some(value)`.
     pub fn full(f: &models::Forecast) -> Self {
         Self {
-            temperature_c: f.temperature_c.to_f64().unwrap_or(0.0),
-            temperature_percentile_10_c: f.temperature_percentile_10_c.and_then(|v| v.to_f64()),
-            temperature_percentile_90_c: f.temperature_percentile_90_c.and_then(|v| v.to_f64()),
-            feels_like_c: f.feels_like_c.to_f64().unwrap_or(0.0),
-            snow_temperature_c: f.snow_temperature_c.and_then(|v| v.to_f64()).unwrap_or(0.0),
-            wind_speed_ms: f.wind_speed_ms.to_f64().unwrap_or(0.0),
-            wind_speed_percentile_10_ms: f.wind_speed_percentile_10_ms.and_then(|v| v.to_f64()),
-            wind_speed_percentile_90_ms: f.wind_speed_percentile_90_ms.and_then(|v| v.to_f64()),
-            wind_direction_deg: f.wind_direction_deg.to_f64().unwrap_or(0.0),
-            wind_gust_ms: f.wind_gust_ms.and_then(|v| v.to_f64()),
-            precipitation_mm: f.precipitation_mm.to_f64().unwrap_or(0.0),
-            precipitation_min_mm: f.precipitation_min_mm.and_then(|v| v.to_f64()),
-            precipitation_max_mm: f.precipitation_max_mm.and_then(|v| v.to_f64()),
+            temperature_c: dec_to_f64(f.temperature_c),
+            temperature_percentile_10_c: opt_dec_to_f64(f.temperature_percentile_10_c),
+            temperature_percentile_90_c: opt_dec_to_f64(f.temperature_percentile_90_c),
+            feels_like_c: dec_to_f64(f.feels_like_c),
+            snow_temperature_c: f.snow_temperature_c.map(dec_to_f64).unwrap_or(0.0),
+            wind_speed_ms: dec_to_f64(f.wind_speed_ms),
+            wind_speed_percentile_10_ms: opt_dec_to_f64(f.wind_speed_percentile_10_ms),
+            wind_speed_percentile_90_ms: opt_dec_to_f64(f.wind_speed_percentile_90_ms),
+            wind_direction_deg: dec_to_f64(f.wind_direction_deg),
+            wind_gust_ms: opt_dec_to_f64(f.wind_gust_ms),
+            precipitation_mm: dec_to_f64(f.precipitation_mm),
+            precipitation_min_mm: opt_dec_to_f64(f.precipitation_min_mm),
+            precipitation_max_mm: opt_dec_to_f64(f.precipitation_max_mm),
             precipitation_type: f.precipitation_type.clone(),
-            humidity_pct: Some(f.humidity_pct.to_f64().unwrap_or(0.0)),
-            dew_point_c: Some(f.dew_point_c.to_f64().unwrap_or(0.0)),
-            cloud_cover_pct: Some(f.cloud_cover_pct.to_f64().unwrap_or(0.0)),
-            uv_index: f.uv_index.and_then(|v| v.to_f64()),
+            humidity_pct: Some(dec_to_f64(f.humidity_pct)),
+            dew_point_c: Some(dec_to_f64(f.dew_point_c)),
+            cloud_cover_pct: Some(dec_to_f64(f.cloud_cover_pct)),
+            uv_index: opt_dec_to_f64(f.uv_index),
             symbol_code: f.symbol_code.clone(),
         }
     }
@@ -136,17 +139,17 @@ impl Weather {
     /// Detail-only fields are `None` and will be omitted from JSON.
     pub fn simplified(f: &models::Forecast) -> Self {
         Self {
-            temperature_c: f.temperature_c.to_f64().unwrap_or(0.0),
-            temperature_percentile_10_c: f.temperature_percentile_10_c.and_then(|v| v.to_f64()),
-            temperature_percentile_90_c: f.temperature_percentile_90_c.and_then(|v| v.to_f64()),
-            feels_like_c: f.feels_like_c.to_f64().unwrap_or(0.0),
-            snow_temperature_c: f.snow_temperature_c.and_then(|v| v.to_f64()).unwrap_or(0.0),
-            wind_speed_ms: f.wind_speed_ms.to_f64().unwrap_or(0.0),
-            wind_speed_percentile_10_ms: f.wind_speed_percentile_10_ms.and_then(|v| v.to_f64()),
-            wind_speed_percentile_90_ms: f.wind_speed_percentile_90_ms.and_then(|v| v.to_f64()),
-            wind_direction_deg: f.wind_direction_deg.to_f64().unwrap_or(0.0),
+            temperature_c: dec_to_f64(f.temperature_c),
+            temperature_percentile_10_c: opt_dec_to_f64(f.temperature_percentile_10_c),
+            temperature_percentile_90_c: opt_dec_to_f64(f.temperature_percentile_90_c),
+            feels_like_c: dec_to_f64(f.feels_like_c),
+            snow_temperature_c: f.snow_temperature_c.map(dec_to_f64).unwrap_or(0.0),
+            wind_speed_ms: dec_to_f64(f.wind_speed_ms),
+            wind_speed_percentile_10_ms: opt_dec_to_f64(f.wind_speed_percentile_10_ms),
+            wind_speed_percentile_90_ms: opt_dec_to_f64(f.wind_speed_percentile_90_ms),
+            wind_direction_deg: dec_to_f64(f.wind_direction_deg),
             wind_gust_ms: None,
-            precipitation_mm: f.precipitation_mm.to_f64().unwrap_or(0.0),
+            precipitation_mm: dec_to_f64(f.precipitation_mm),
             precipitation_min_mm: None,
             precipitation_max_mm: None,
             precipitation_type: f.precipitation_type.clone(),
@@ -424,10 +427,13 @@ pub async fn get_race_forecast(
             "target_duration_hours must be a finite number".to_string(),
         ));
     }
-    if params.target_duration_hours <= 0.0 || params.target_duration_hours > 72.0 {
-        return Err(AppError::BadRequest(
-            "target_duration_hours must be between 0 (exclusive) and 72".to_string(),
-        ));
+    if params.target_duration_hours <= 0.0
+        || params.target_duration_hours > MAX_TARGET_DURATION_HOURS
+    {
+        return Err(AppError::BadRequest(format!(
+            "target_duration_hours must be between 0 (exclusive) and {}",
+            MAX_TARGET_DURATION_HOURS as u64
+        )));
     }
 
     // Use lightweight query — no GPX blob
@@ -441,8 +447,8 @@ pub async fn get_race_forecast(
     let pacing_inputs: Vec<PacingCheckpoint> = checkpoints
         .iter()
         .map(|cp| PacingCheckpoint {
-            distance_km: cp.distance_km.to_f64().unwrap_or(0.0),
-            elevation_m: cp.elevation_m.to_f64().unwrap_or(0.0),
+            distance_km: dec_to_f64(cp.distance_km),
+            elevation_m: dec_to_f64(cp.elevation_m),
         })
         .collect();
     let time_fractions = calculate_pass_time_fractions(&pacing_inputs);
@@ -477,7 +483,7 @@ pub async fn get_race_forecast(
             RaceForecastCheckpoint {
                 checkpoint_id: cpwt.checkpoint.id,
                 name: cpwt.checkpoint.name.clone(),
-                distance_km: cpwt.checkpoint.distance_km.to_f64().unwrap_or(0.0),
+                distance_km: dec_to_f64(cpwt.checkpoint.distance_km),
                 expected_time: cpwt.forecast_time.to_rfc3339(),
                 forecast_available: weather.is_some(),
                 weather,

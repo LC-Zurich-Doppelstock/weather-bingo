@@ -2,6 +2,8 @@
 use axum::{routing::get, Router};
 use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use utoipa::OpenApi;
@@ -10,12 +12,19 @@ use utoipa_swagger_ui::SwaggerUi;
 mod config;
 mod db;
 mod errors;
+mod helpers;
 mod routes;
 mod services;
 
 use config::AppConfig;
 use routes::forecasts::AppState;
+use services::poller::{PollerState, SharedPollerState};
 use services::yr::YrClient;
+
+/// Maximum number of connections in the database pool.
+const DB_POOL_MAX_CONNECTIONS: u32 = 5;
+/// Minimum number of connections kept alive in the database pool.
+const DB_POOL_MIN_CONNECTIONS: u32 = 2;
 
 /// Weather Bingo API — OpenAPI specification.
 #[derive(OpenApi)]
@@ -33,6 +42,7 @@ use services::yr::YrClient;
         (name = "Health", description = "Service health check"),
         (name = "Races", description = "Race and checkpoint management"),
         (name = "Forecasts", description = "Weather forecast retrieval and history"),
+        (name = "Poller", description = "Background forecast poller status"),
     ),
     paths(
         routes::health::health_check,
@@ -42,6 +52,7 @@ use services::yr::YrClient;
         routes::forecasts::get_checkpoint_forecast,
         routes::forecasts::get_checkpoint_forecast_history,
         routes::forecasts::get_race_forecast,
+        routes::poller::get_poller_status,
     ),
     components(
         schemas(
@@ -55,6 +66,8 @@ use services::yr::YrClient;
             routes::forecasts::ForecastHistoryResponse,
             routes::forecasts::RaceForecastCheckpoint,
             routes::forecasts::RaceForecastResponse,
+            services::poller::PollerState,
+            services::poller::CheckpointPollStatus,
             errors::ErrorResponse,
         )
     )
@@ -76,8 +89,8 @@ async fn main() {
 
     // Set up database connection pool
     let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .min_connections(2)
+        .max_connections(DB_POOL_MAX_CONNECTIONS)
+        .min_connections(DB_POOL_MIN_CONNECTIONS)
         .connect(&config.database_url)
         .await
         .expect("Failed to connect to database");
@@ -134,8 +147,16 @@ async fn main() {
     // Build shared application state
     let app_state = AppState {
         pool: pool.clone(),
-        yr_client,
+        yr_client: yr_client.clone(),
     };
+
+    // Create shared poller state and spawn background poller
+    let poller_state: SharedPollerState = Arc::new(RwLock::new(PollerState::new()));
+    tokio::spawn(services::poller::run_poller(
+        pool.clone(),
+        yr_client,
+        poller_state.clone(),
+    ));
 
     // CORS — read-only API, restrict methods to GET; expose X-Forecast-Stale
     let cors = CorsLayer::new()
@@ -180,10 +201,19 @@ async fn main() {
         .route("/api/v1/health", get(routes::health::health_check))
         .with_state(pool);
 
+    // Poller status uses SharedPollerState
+    let poller_routes = Router::new()
+        .route(
+            "/api/v1/poller/status",
+            get(routes::poller::get_poller_status),
+        )
+        .with_state(poller_state);
+
     let app = Router::new()
         .merge(health_routes)
         .merge(race_routes)
         .merge(forecast_routes)
+        .merge(poller_routes)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(cors);
 

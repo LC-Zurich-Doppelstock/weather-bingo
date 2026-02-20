@@ -23,13 +23,15 @@ Frontend (React/TS)  →  REST API (Rust/Axum)  →  PostgreSQL
 | Component | Tech | Role |
 |-----------|------|------|
 | Frontend | React, TypeScript, Vite, Leaflet, Recharts, Tailwind | Map, charts, UI |
-| API | Rust, Axum, sqlx | REST endpoints, forecast caching, yr.no integration |
+| API | Rust, Axum, sqlx | REST endpoints, forecast caching, yr.no integration, background poller |
 | Database | PostgreSQL | Races, checkpoints, forecast history |
 | Weather source | [yr.no Locationforecast 2.0](https://api.met.no/weatherapi/locationforecast/2.0/) | Forecast data |
 
 ## Key Concepts
 
 **Cache-first forecasts** — the API serves from a local yr.no response cache. Freshness is controlled by yr.no's `Expires` header — when the cache expires, the API fetches fresh data and stores it. Old forecasts are never overwritten — every fetch creates a new historical record.
+
+**Background polling** — a background task proactively fetches forecasts from yr.no for all checkpoints of upcoming races, even when no users are browsing. This ensures every yr.no model run is captured in the forecast history. The poller's schedule is driven by yr.no's `Expires` header, with retry logic to detect genuinely new data.
 
 **Pacing-aware** — forecasts are calculated for when *you* will be at each point, not just a fixed time. Set a target duration and the app computes your expected pass-through time at each checkpoint using elevation-adjusted pacing (with even pacing as fallback for flat courses).
 

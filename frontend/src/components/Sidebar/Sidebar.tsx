@@ -36,6 +36,35 @@ function BackToOverviewButton({ onClick }: { onClick: () => void }) {
   );
 }
 
+/** Reusable error message with a retry button. */
+function ErrorWithRetry({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="p-4">
+      <p className="text-error">Failed to load forecast data.</p>
+      <button
+        onClick={onRetry}
+        className="mt-2 text-sm text-primary hover:text-primary-hover transition-colors"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
+/** Animated loading skeleton rows (used while forecast data is in flight). */
+export function LoadingSkeleton({ rows = 5 }: { rows?: number }) {
+  return (
+    <div className="space-y-3" role="status" aria-label="Loading forecast data">
+      {[...Array(rows)].map((_, i) => (
+        <div
+          key={i}
+          className="h-12 animate-pulse rounded-lg bg-surface-alt"
+        />
+      ))}
+    </div>
+  );
+}
+
 /**
  * Sidebar container that switches between checkpoint detail view
  * and course overview based on selection state.
@@ -104,14 +133,7 @@ export default function Sidebar({
                 </span>
               </h2>
             </div>
-            <div className="space-y-3" role="status" aria-label="Loading forecast data">
-              {[...Array(5)].map((_, i) => (
-                <div
-                  key={i}
-                  className="h-12 animate-pulse rounded-lg bg-surface-alt"
-                />
-              ))}
-            </div>
+            <LoadingSkeleton />
           </div>
         </div>
       );
@@ -122,15 +144,7 @@ export default function Sidebar({
       return (
         <div className="h-full overflow-y-auto" role="region" aria-label={`Weather details for ${selectedCheckpoint.name}`}>
           <BackToOverviewButton onClick={onClearSelection} />
-          <div className="p-4">
-            <p className="text-error">Failed to load forecast data.</p>
-            <button
-              onClick={() => refetchRaceForecast()}
-              className="mt-2 text-sm text-primary hover:text-primary-hover transition-colors"
-            >
-              Retry
-            </button>
-          </div>
+          <ErrorWithRetry onRetry={() => refetchRaceForecast()} />
         </div>
       );
     }
@@ -140,15 +154,7 @@ export default function Sidebar({
       return (
         <div className="h-full overflow-y-auto" role="region" aria-label={`Weather details for ${selectedCheckpoint.name}`}>
           <BackToOverviewButton onClick={onClearSelection} />
-          <div className="p-4">
-            <p className="text-error">Failed to load forecast data.</p>
-            <button
-              onClick={() => refetchForecast()}
-              className="mt-2 text-sm text-primary hover:text-primary-hover transition-colors"
-            >
-              Retry
-            </button>
-          </div>
+          <ErrorWithRetry onRetry={() => refetchForecast()} />
         </div>
       );
     }
@@ -188,13 +194,7 @@ export default function Sidebar({
   if (raceForecastError) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
-        <p className="text-error">Failed to load forecast data.</p>
-        <button
-          onClick={() => refetchRaceForecast()}
-          className="text-sm text-primary hover:text-primary-hover transition-colors"
-        >
-          Retry
-        </button>
+        <ErrorWithRetry onRetry={() => refetchRaceForecast()} />
       </div>
     );
   }

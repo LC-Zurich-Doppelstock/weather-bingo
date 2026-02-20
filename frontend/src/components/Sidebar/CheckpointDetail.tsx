@@ -10,6 +10,7 @@ import {
   windDirectionLabel,
 } from "../../utils/formatting";
 import MiniTimeline from "./MiniTimeline";
+import { LoadingSkeleton } from "./Sidebar";
 import InfoPopover from "../ui/InfoPopover";
 
 const SNOW_TEMP_INFO =
@@ -40,14 +41,7 @@ export default function CheckpointDetail({
     return (
       <div className="space-y-4 p-4" aria-busy="true">
         <CheckpointHeader checkpoint={checkpoint} passTime={passTime} />
-        <div className="space-y-3" role="status" aria-label="Loading forecast data">
-          {[...Array(5)].map((_, i) => (
-            <div
-              key={i}
-              className="h-12 animate-pulse rounded-lg bg-surface-alt"
-            />
-          ))}
-        </div>
+        <LoadingSkeleton />
       </div>
     );
   }

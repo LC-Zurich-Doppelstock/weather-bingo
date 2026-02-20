@@ -25,6 +25,12 @@ The app stores both current and historical forecasts, allowing users to observe 
 └─────────────┘       │             │◀──────────────────────       └──────┬──────┘
                       │             │─────────────────────────────────────▶│
                       │             │◀────────────────────────────────────┘
+                      └──────┬──────┘
+                             │
+                      ┌──────┴──────┐
+                      │  Background │
+                      │   Poller    │
+                      │ (tokio task)│
                       └─────────────┘
 ```
 
@@ -34,6 +40,7 @@ The app stores both current and historical forecasts, allowing users to observe 
 | ---------- | ------------------ | -------------------------------------------------- |
 | Frontend   | TypeScript (React) | Interactive map, charts, race/weather visualisation |
 | API        | Rust (Axum)        | REST endpoints, forecast fetching, caching logic    |
+| Poller     | Rust (tokio task)  | Background forecast polling to capture every yr.no model run |
 | API Docs   | utoipa + Swagger UI | Interactive OpenAPI documentation at `/swagger-ui/` |
 | Database   | PostgreSQL         | Stores races, checkpoints, forecasts (current + historic) |
 | Weather    | yr.no (MET Norway) | External weather data source                       |
@@ -42,6 +49,7 @@ The app stores both current and historical forecasts, allowing users to observe 
 ### 2.2 Key Design Principles
 
 - **Cache-first**: The API serves forecasts from the database. If data is missing or stale, it fetches from yr.no.
+- **Proactive polling**: A background poller ensures the `forecasts` table captures every yr.no model run for upcoming races, even when no users are actively browsing.
 - **Historical preservation**: Forecasts are never overwritten — each fetch is stored as a new record with a `fetched_at` timestamp.
 - **Race-agnostic data model**: The schema supports multiple races, locations, and seasons.
 - **Test-driven**: All components (API and UI) include comprehensive test suites.
@@ -174,6 +182,12 @@ Table: yr_responses
 | ------ | -------------- | ------------------ |
 | GET    | `/api/v1/health` | Health check       |
 
+#### Poller
+
+| Method | Path                    | Description                              |
+| ------ | ----------------------- | ---------------------------------------- |
+| GET    | `/api/v1/poller/status` | Background poller status (per-checkpoint info + global timing) |
+
 ### 4.2 Forecast Resolution Logic
 
 The API uses a **targeted extraction** pattern. The full yr.no timeseries response (~10 days of data) is cached in `yr_responses`, but only the forecast entry closest to each requested pass-through time is extracted and stored in the `forecasts` table.
@@ -301,6 +315,122 @@ The API automatically generates an OpenAPI 3.0 specification using `utoipa` and 
 | `/api-docs/openapi.json` | OpenAPI JSON specification |
 
 All route handlers, request parameters, and response types are annotated with `utoipa::ToSchema` and `utoipa::path` macros for automatic documentation.
+
+### 4.7 Background Poller
+
+The API runs a background task (spawned via `tokio::spawn` at startup) that proactively fetches weather forecasts from yr.no for all checkpoints of upcoming races. This ensures the `forecasts` table captures every yr.no model run — even when no users are actively calling the API — which is critical for the forecast history feature.
+
+#### Why it exists
+
+Without the poller, forecast history has gaps: yr.no only returns the *latest* model run (no archive), and the extract-on-read pattern only stores forecasts when a user requests them. If nobody browses the app between model runs (~every 6 hours), that model run's data is lost forever.
+
+#### Polling schedule — Expires-driven, not fixed
+
+The poller does **not** use a fixed interval. Instead, it derives its sleep duration from yr.no's `Expires` header (already stored in `yr_responses.expires_at`):
+
+```
+next_wakeup = MIN(expires_at across all polled checkpoints) + 30s buffer
+sleep_duration = clamp(next_wakeup - now, 1 min, 30 min)
+```
+
+If no upcoming races exist within the lookahead window, the poller sleeps for 1 hour.
+
+#### Retry logic — detecting new model runs vs. 304s
+
+After waking and refreshing, the poller detects whether yr.no actually provided new model run data or just returned a 304 (same data, extended expiry):
+
+- **Detection:** Compare `yr_responses.fetched_at` before and after calling `ensure_yr_cache_fresh`. If unchanged → got 304.
+- **On 304:** Wait 2 minutes, retry, up to 5 retries total. Then accept and move on.
+- **Rationale:** yr.no model runs happen ~every 6 hours (00, 06, 12, 18 UTC), but the actual data may appear a few minutes after the `Expires` time passes.
+
+#### Forecast time extraction — distance-based time bands
+
+For each checkpoint, the poller computes a realistic arrival time band based on distance from start, then extracts forecasts at every hourly slot within that band:
+
+```
+earliest_arrival = start_time + (distance_km / 30.0) hours   (fastest: 30 km/h)
+latest_arrival   = start_time + (distance_km / 10.0) hours   (slowest: 10 km/h)
+extraction_slots = floor(earliest_arrival) .. ceil(latest_arrival)  (hourly)
+```
+
+This avoids pointless extractions (e.g., finish-line forecast at race start time) while covering all realistic pacing scenarios. The start checkpoint (distance 0) always extracts at the race start hour.
+
+#### Scope
+
+The poller only processes checkpoints that belong to a race with `start_time` within the lookahead window. Orphan checkpoints or past races are not polled.
+
+#### State — in-memory only
+
+Poller state is held in-memory (`Arc<RwLock<PollerState>>`) and shared with the status endpoint. No additional database table is needed — the functional scheduling state (`expires_at`) already lives in `yr_responses`. On restart, the poller reconstructs its schedule from that table. Only cosmetic status display info is lost on restart.
+
+State is updated **progressively** during each poll cycle: checkpoint results are published after the initial pass and after each retry, so the status endpoint is useful even mid-cycle.
+
+#### Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `POLLER_MIN_SPEED_KMH` | 10.0 | Slowest realistic pace (km/h) |
+| `POLLER_MAX_SPEED_KMH` | 30.0 | Fastest realistic pace (km/h) |
+| `POLLER_LOOKAHEAD_DAYS` | 10 | How far ahead to look for upcoming races |
+| `POLLER_WAKEUP_BUFFER_SECS` | 30 | Buffer after earliest `expires_at` before waking |
+| `POLLER_MIN_SLEEP_SECS` | 60 | Minimum sleep between cycles |
+| `POLLER_MAX_SLEEP_SECS` | 1800 | Maximum sleep between cycles (30 min) |
+| `POLLER_RETRY_DELAY_SECS` | 120 | Delay between 304 retries (2 min) |
+| `POLLER_MAX_RETRIES` | 5 | Maximum retries when yr.no returns 304 |
+
+#### Data flow
+
+```
+1. Query upcoming races (start_time within LOOKAHEAD_DAYS) and their checkpoints
+
+2. For each checkpoint:
+   a. Record current yr_responses.fetched_at (pre-poll snapshot)
+   b. Call ensure_yr_cache_fresh() — may fetch from yr.no or get 304
+   c. Compare fetched_at after vs. before:
+      → Changed: new model run data ("new_data")
+      → Unchanged: 304 / same data ("not_modified")
+
+3. If any checkpoints got "not_modified":
+   → Wait RETRY_DELAY_SECS, retry only those checkpoints
+   → Repeat up to MAX_RETRIES times
+   → Update shared state after each retry pass
+
+4. For "new_data" checkpoints: extract forecasts at time-band slots
+   → Write to forecasts table (ON CONFLICT DO NOTHING for dedup)
+
+5. Compute next wakeup from MIN(expires_at) + buffer
+   → Clamp sleep to [MIN_SLEEP, MAX_SLEEP]
+
+6. Update shared state with final timing info, sleep
+```
+
+#### Status endpoint: GET `/api/v1/poller/status`
+
+Returns the current poller state as JSON. Documented in Swagger UI under the "Poller" tag.
+
+**Response:**
+```json
+{
+  "active": true,
+  "next_wakeup_at": "2026-03-01T08:31:30Z",
+  "last_poll_completed_at": "2026-03-01T08:01:02Z",
+  "last_poll_duration_ms": 4512,
+  "total_polls": 42,
+  "checkpoints": [
+    {
+      "checkpoint_id": "uuid",
+      "checkpoint_name": "Smågan",
+      "race_name": "Vasaloppet",
+      "distance_km": 11.0,
+      "expires_at": "2026-03-01T08:30:59Z",
+      "last_fetched_at": "2026-03-01T08:00:07Z",
+      "last_model_run_at": "2026-03-01T06:00:00Z",
+      "last_poll_result": "new_data",
+      "extraction_count": 3
+    }
+  ]
+}
+```
 
 ---
 
@@ -678,11 +808,13 @@ weather-bingo/
 │   │   │   ├── mod.rs
 │   │   │   ├── races.rs        # Race endpoints
 │   │   │   ├── forecasts.rs    # Forecast endpoints
-│   │   │   └── health.rs       # Health check
+│   │   │   ├── health.rs       # Health check
+│   │   │   └── poller.rs       # Poller status endpoint
 │   │   ├── services/
 │   │   │   ├── mod.rs
 │   │   │   ├── forecast.rs     # Forecast resolution logic
 │   │   │   ├── gpx.rs          # GPX parser (wb: namespace extensions)
+│   │   │   ├── poller.rs       # Background forecast poller
 │   │   │   └── yr.rs           # yr.no API client
 │   │   └── errors.rs           # Error types
 │   └── migrations/             # SQL migrations (sqlx)
@@ -1034,6 +1166,7 @@ Distributes total race time across segments proportionally to effort cost, which
 - [ ] Additional races (Birkebeinerrennet, Marcialonga, Engadin Skimarathon, …)
 - [ ] Historical weather source for past seasons
 - [ ] PWA / offline support
+- [x] Background forecast polling (proactive yr.no fetching)
 - [ ] Push notifications for significant forecast changes
 - [ ] E2E tests with Playwright
 - [ ] CI/CD pipeline
@@ -1054,3 +1187,4 @@ Distributes total race time across segments proportionally to effort cost, which
 | 7  | OpenAPI / Swagger UI documentation via `utoipa` | Done |
 | 8  | p10/p90 uncertainty bands in CourseOverview charts and race forecast API | Done |
 | 9  | Railway cloud deployment: multi-stage frontend Dockerfile, nginx reverse proxy, repo-root API build context | Done |
+| 10 | Background forecast poller: Expires-driven schedule, retry logic, distance-based time bands, status endpoint | Done |

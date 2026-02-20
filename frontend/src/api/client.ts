@@ -8,7 +8,6 @@ import type {
   CoursePoint,
   Checkpoint,
   ForecastResponse,
-  ForecastHistoryResponse,
   RaceForecastResponse,
 } from "./types";
 
@@ -91,16 +90,6 @@ export function fetchForecast(
 ): Promise<ForecastResponse> {
   return fetchJson<ForecastResponse>(
     `${BASE_URL}/forecasts/checkpoint/${checkpointId}?datetime=${encodeURIComponent(datetime)}`
-  );
-}
-
-/** Get forecast history for a checkpoint at a specific time. */
-export function fetchForecastHistory(
-  checkpointId: string,
-  datetime: string
-): Promise<ForecastHistoryResponse> {
-  return fetchJson<ForecastHistoryResponse>(
-    `${BASE_URL}/forecasts/checkpoint/${checkpointId}/history?datetime=${encodeURIComponent(datetime)}`
   );
 }
 
