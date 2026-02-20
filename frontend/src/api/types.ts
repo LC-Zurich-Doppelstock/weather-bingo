@@ -88,3 +88,27 @@ export interface RaceForecastResponse {
   forecast_horizon: string | null; // ISO 8601 — min horizon across all checkpoints
   checkpoints: RaceForecastCheckpoint[];
 }
+
+/* ------------------------------------------------------------------ */
+/*  Forecast history (Section 9.5)                                     */
+/* ------------------------------------------------------------------ */
+
+/** A single historical forecast entry showing weather at a previous model run. */
+export interface ForecastHistoryEntry {
+  /** When this version of the forecast was fetched (ISO 8601). */
+  fetched_at: string;
+  /** When yr.no's weather model generated this forecast (ISO 8601). Null for pre-poller rows. */
+  yr_model_run_at: string | null;
+  /** Effective model run time: yr_model_run_at if available, otherwise fetched_at. Always populated. */
+  model_run_at: string;
+  /** Weather data at this model run. */
+  weather: ForecastWeather;
+}
+
+/** Response from GET /api/v1/forecasts/checkpoint/:id/history?datetime=ISO8601. */
+export interface ForecastHistoryResponse {
+  checkpoint_id: string;
+  checkpoint_name: string;
+  forecast_time: string; // ISO 8601
+  history: ForecastHistoryEntry[];
+}

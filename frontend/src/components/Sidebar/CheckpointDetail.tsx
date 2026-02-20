@@ -10,6 +10,7 @@ import {
   windDirectionLabel,
 } from "../../utils/formatting";
 import MiniTimeline from "./MiniTimeline";
+import ForecastHistory from "./ForecastHistory";
 import { LoadingSkeleton } from "./Sidebar";
 import InfoPopover from "../ui/InfoPopover";
 
@@ -184,7 +185,10 @@ export default function CheckpointDetail({
         </WeatherRow>
       )}
 
-      {/* Mini Timeline */}
+      {/* Forecast History (collapsible, lazy-loaded) */}
+      <ForecastHistory checkpointId={checkpoint.id} passTime={passTime} />
+
+      {/* Mini Timeline — weather at different paces */}
       <MiniTimeline checkpointId={checkpoint.id} passTime={passTime} />
 
       {/* Metadata */}

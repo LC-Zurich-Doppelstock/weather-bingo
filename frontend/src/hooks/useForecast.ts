@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchForecast,
+  fetchForecastHistory,
   fetchRaceForecastWithStale,
 } from "../api/client";
 import type { RaceForecastResponse } from "../api/types";
@@ -35,5 +36,22 @@ export function useRaceForecast(
       data: response.data,
       stale: response.stale,
     }),
+  });
+}
+
+/**
+ * Fetch forecast history for a checkpoint at a specific time.
+ * Lazy: only fetches when `enabled` is true (collapsed by default).
+ */
+export function useForecastHistory(
+  checkpointId: string | null,
+  datetime: string | null,
+  enabled: boolean
+) {
+  return useQuery({
+    queryKey: ["forecastHistory", checkpointId, datetime],
+    queryFn: () => fetchForecastHistory(checkpointId!, datetime!),
+    enabled: enabled && !!checkpointId && !!datetime,
+    staleTime: 5 * 60_000, // 5 minutes — history changes slowly
   });
 }

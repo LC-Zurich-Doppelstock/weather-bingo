@@ -388,15 +388,19 @@ pub(crate) async fn get_latest_forecasts_batch(
 pub(crate) const MAX_FORECAST_HISTORY_ENTRIES: i32 = 200;
 
 /// Get forecast history for a checkpoint at a specific forecast time.
-/// Returns all fetched versions (up to `MAX_FORECAST_HISTORY_ENTRIES`),
-/// ordered by fetched_at ascending.
+///
+/// Returns one entry per yr.no model run (deduplicated server-side),
+/// ordered by model run time ascending. When `yr_model_run_at` is NULL
+/// (pre-poller legacy rows), `fetched_at` is used as the fallback via
+/// `COALESCE`. For each model run, only the latest `fetched_at` is kept.
 pub(crate) async fn get_forecast_history(
     pool: &PgPool,
     checkpoint_id: Uuid,
     forecast_time: DateTime<Utc>,
 ) -> Result<Vec<Forecast>, sqlx::Error> {
     let query = format!(
-        "SELECT {FORECAST_COLS}
+        "SELECT DISTINCT ON (COALESCE(yr_model_run_at, fetched_at))
+             {FORECAST_COLS}
          FROM forecasts
          WHERE checkpoint_id = $1
            AND forecast_time = (
@@ -406,7 +410,7 @@ pub(crate) async fn get_forecast_history(
                ORDER BY ABS(EXTRACT(EPOCH FROM (forecast_time - $2)))
                LIMIT 1
            )
-         ORDER BY fetched_at ASC
+         ORDER BY COALESCE(yr_model_run_at, fetched_at) ASC, fetched_at DESC
          LIMIT {limit}",
         h = FORECAST_TIME_TOLERANCE_HOURS,
         limit = MAX_FORECAST_HISTORY_ENTRIES,
