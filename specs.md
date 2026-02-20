@@ -508,7 +508,8 @@ When a checkpoint is selected, the sidebar displays:
 │  ☁  Cloud cover: 90%           │
 │                                 │
 ├─────────────────────────────────┤
-│  ⏱ Mini Timeline (09:00–12:00) │
+│  ⏱ When Paced Differently      │
+│     (09:00–12:00)              │
 │  ┌─────────────────────────────┐│
 │  │ temp ───────•───────        ││
 │  │ precip ▁▂▃▅▇█▇▅▃▂          ││
@@ -556,6 +557,7 @@ When the full course is selected:
 
 - Compact, stacked mini-charts (sparkline style).
 - Uncertainty ranges shown as shaded bands where available.
+- Precipitation rendered as bars (`Bar` chart); tooltip shows min/max range when available (e.g. "0.2 mm (0.0–0.5 mm)").
 - Checkpoint positions marked on x-axis.
 - Hovering a data point highlights the corresponding checkpoint marker on the map.
 - When a map checkpoint is hovered, a dashed accent-rose (`#D4687A`) reference line is drawn at that checkpoint's distance on all charts.
@@ -621,8 +623,8 @@ For weather data visualisation, the following ordered set is used:
 | -- | ----------- | ---------------- | ------------------------------ |
 | 1  | `#2DD4A8`   | Emerald mint     | Temperature                    |
 | 2  | `#14B8A6`   | Teal             | Feels-like temperature         |
-| 3  | `#7C8CF5`   | Lavender blue    | Wind speed                     |
-| 4  | `#F5A623`   | Golden amber     | Precipitation                  |
+| 3  | `#F5A623`   | Golden amber     | Wind speed                     |
+| 4  | `#7C8CF5`   | Lavender blue    | Precipitation                  |
 | 5  | `#34EBB9`   | Bright mint      | Humidity                       |
 | 6  | `#5A7A6E`   | Faded green      | Cloud cover                    |
 | 7  | `#D4687A`   | Dusty rose       | Elevation profile              |
@@ -1012,7 +1014,7 @@ Returns the parsed course GPS track as an array of coordinate points (extracted 
 
 > **Note:** `forecast_available` is `false` when the requested datetime is beyond yr.no's ~10-day forecast horizon. In this case, `weather`, `fetched_at`, `source`, and `yr_model_run_at` are all null. The `forecast_time` still reflects the originally requested time.
 
-> **Note:** The single-checkpoint endpoint returns the **full** weather object with all detail fields (wind_gust_ms, precipitation_min/max_mm, humidity_pct, dew_point_c, cloud_cover_pct, uv_index). The API uses a unified `Weather` struct with `#[serde(skip_serializing_if = "Option::is_none")]` — detail-only fields are omitted when `None` rather than using a separate simplified type.
+> **Note:** The single-checkpoint endpoint returns the **full** weather object with all detail fields (wind_gust_ms, humidity_pct, dew_point_c, cloud_cover_pct, uv_index). The API uses a unified `Weather` struct with `#[serde(skip_serializing_if = "Option::is_none")]` — detail-only fields are omitted when `None` rather than using a separate simplified type. Precipitation uncertainty (precipitation_min/max_mm) is included in both race-level and single-checkpoint responses.
 
 ### 9.5 GET `/api/v1/forecasts/checkpoint/:checkpoint_id/history?datetime=ISO8601`
 
@@ -1068,6 +1070,8 @@ Returns the parsed course GPS track as an array of coordinate points (extracted 
         "wind_speed_percentile_90_ms": 3.5,
         "wind_direction_deg": 315,
         "precipitation_mm": 0.2,
+        "precipitation_min_mm": 0.0,
+        "precipitation_max_mm": 0.5,
         "precipitation_type": "snow",
         "snow_temperature_c": -8.1,
         "symbol_code": "lightsnow"
@@ -1091,7 +1095,7 @@ Returns the parsed course GPS track as an array of coordinate points (extracted 
 
 > **Note:** The race-level `yr_model_run_at` is the **oldest** (minimum) model run time across all checkpoints that have available forecasts, providing a conservative indicator of forecast freshness. The UI displays this as "Model run: {time}" in the course overview. For single-checkpoint views, `yr_model_run_at` comes directly from the individual forecast row. When all checkpoints are beyond the forecast horizon, `yr_model_run_at` is `null`.
 
-> **Note:** The race endpoint returns a **simplified** weather object — detail-only fields (wind_gust_ms, precipitation_min/max_mm, humidity_pct, dew_point_c, cloud_cover_pct, uv_index) are omitted via `#[serde(skip_serializing_if = "Option::is_none")]`. Both endpoints use the same unified `Weather` struct; the race endpoint simply sets detail fields to `None` so they are excluded from the JSON.
+> **Note:** The race endpoint returns a **simplified** weather object — detail-only fields (wind_gust_ms, humidity_pct, dew_point_c, cloud_cover_pct, uv_index) are omitted via `#[serde(skip_serializing_if = "Option::is_none")]`. Both endpoints use the same unified `Weather` struct; the race endpoint simply sets detail fields to `None` so they are excluded from the JSON. Precipitation uncertainty (precipitation_min/max_mm) is included in the race endpoint to support min/max range display in CourseOverview tooltips.
 
 ---
 

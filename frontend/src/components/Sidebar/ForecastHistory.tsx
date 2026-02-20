@@ -4,8 +4,6 @@ import {
   ComposedChart,
   Line,
   Area,
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
   Tooltip,
@@ -39,15 +37,16 @@ function ChevronIcon({ collapsed }: { collapsed: boolean }) {
 
 /** Data point for history charts. */
 interface HistoryDataPoint {
-  /** ISO 8601 model_run_at — used as x-axis key. */
+  /** ISO 8601 model_run_at — kept for tooltip formatting. */
   modelRunAt: string;
-  /** Formatted date label for x-axis ("Feb 19"). */
-  label: string;
+  /** Epoch ms of model_run_at — used as numeric x-axis dataKey. */
+  modelRunEpoch: number;
   temperature: number;
   feelsLike: number;
   snowTemperature: number;
   tempRange: [number, number] | null;
   precipitation: number;
+  precipRange: [number, number] | null;
   wind: number;
   windRange: [number, number] | null;
 }
@@ -65,6 +64,17 @@ function formatModelRunLabel(iso: string, showTime: boolean): string {
     timeZone: "Europe/Stockholm",
   });
   return `${month} ${day} ${time}`;
+}
+
+/** Format epoch ms to short tick label, using the showTime flag from closure. */
+function makeTickFormatter(showTime: boolean) {
+  return (epoch: number) =>
+    formatModelRunLabel(new Date(epoch).toISOString(), showTime);
+}
+
+/** Format epoch ms for tooltip: "Feb 19, 18:00". */
+function formatTooltipFromEpoch(epoch: number): string {
+  return formatTooltipLabel(new Date(epoch).toISOString());
 }
 
 /** Format ISO timestamp for tooltip: "Feb 19, 18:00". */
@@ -127,7 +137,7 @@ export default function ForecastHistory({
       const w = entry.weather;
       return {
         modelRunAt: entry.model_run_at,
-        label: formatModelRunLabel(entry.model_run_at, needsTime),
+        modelRunEpoch: new Date(entry.model_run_at).getTime(),
         temperature: w.temperature_c,
         feelsLike: w.feels_like_c,
         snowTemperature: w.snow_temperature_c,
@@ -137,6 +147,11 @@ export default function ForecastHistory({
             ? ([w.temperature_percentile_10_c, w.temperature_percentile_90_c] as [number, number])
             : null,
         precipitation: w.precipitation_mm,
+        precipRange:
+          w.precipitation_min_mm != null &&
+          w.precipitation_max_mm != null
+            ? ([w.precipitation_min_mm, w.precipitation_max_mm] as [number, number])
+            : null,
         wind: w.wind_speed_ms,
         windRange:
           w.wind_speed_percentile_10_ms != null &&
@@ -145,9 +160,10 @@ export default function ForecastHistory({
             : null,
       };
     });
-  }, [history, needsTime]);
+  }, [history]);
 
   const hasTempBands = chartData.some((d) => d.tempRange !== null);
+  const hasPrecipBands = chartData.some((d) => d.precipRange !== null);
   const hasWindBands = chartData.some((d) => d.windRange !== null);
 
   return (
@@ -206,7 +222,11 @@ export default function ForecastHistory({
                     margin={{ top: 5, right: 5, bottom: 5, left: 0 }}
                   >
                     <XAxis
-                      dataKey="label"
+                      dataKey="modelRunEpoch"
+                      type="number"
+                      scale="time"
+                      domain={["dataMin", "dataMax"]}
+                      tickFormatter={makeTickFormatter(needsTime)}
                       tick={tickStyle}
                       axisLine={axisLineStyle}
                       tickLine={false}
@@ -227,10 +247,7 @@ export default function ForecastHistory({
                         }
                         return [formatTemp(value as number), name];
                       }}
-                      labelFormatter={(_label: string, payload: Array<{ payload?: HistoryDataPoint }>) => {
-                        const point = payload?.[0]?.payload;
-                        return point ? formatTooltipLabel(point.modelRunAt) : _label;
-                      }}
+                      labelFormatter={formatTooltipFromEpoch}
                     />
                     {hasTempBands && (
                       <Area
@@ -268,8 +285,8 @@ export default function ForecastHistory({
                       dataKey="temperature"
                       stroke={chartColors.temperature}
                       strokeWidth={2}
-                      dot={{ fill: chartColors.temperature, r: 3 }}
-                      activeDot={{ r: 5 }}
+                      dot={false}
+                      activeDot={{ r: 4 }}
                       name="Temperature"
                     />
                   </ComposedChart>
@@ -279,12 +296,16 @@ export default function ForecastHistory({
               {/* Precipitation chart */}
               <HistorySection title="Precipitation" unit="mm">
                 <ResponsiveContainer width="100%" height={100}>
-                  <BarChart
+                  <ComposedChart
                     data={chartData}
                     margin={{ top: 5, right: 5, bottom: 5, left: 0 }}
                   >
                     <XAxis
-                      dataKey="label"
+                      dataKey="modelRunEpoch"
+                      type="number"
+                      scale="time"
+                      domain={["dataMin", "dataMax"]}
+                      tickFormatter={makeTickFormatter(needsTime)}
                       tick={tickStyle}
                       axisLine={axisLineStyle}
                       tickLine={false}
@@ -298,19 +319,37 @@ export default function ForecastHistory({
                     />
                     <Tooltip
                       contentStyle={tooltipStyle}
-                      formatter={(value: number) => [formatPrecip(value), ""]}
-                      labelFormatter={(_label: string, payload: Array<{ payload?: HistoryDataPoint }>) => {
-                        const point = payload?.[0]?.payload;
-                        return point ? formatTooltipLabel(point.modelRunAt) : _label;
+                      formatter={(value: number | [number, number], name: string) => {
+                        if (name === "Precip min-max") {
+                          const range = value as [number, number];
+                          return [`${formatPrecip(range[0])} to ${formatPrecip(range[1])}`, "Precip min-max"];
+                        }
+                        return [formatPrecip(value as number), name];
                       }}
+                      labelFormatter={formatTooltipFromEpoch}
                     />
-                    <Bar
+                    {hasPrecipBands && (
+                      <Area
+                        type="monotone"
+                        dataKey="precipRange"
+                        fill={chartColors.precipitation}
+                        fillOpacity={uncertaintyOpacity}
+                        stroke="none"
+                        name="Precip min-max"
+                        connectNulls
+                        activeDot={false}
+                      />
+                    )}
+                    <Line
+                      type="monotone"
                       dataKey="precipitation"
-                      fill={chartColors.precipitation}
-                      radius={[2, 2, 0, 0]}
+                      stroke={chartColors.precipitation}
+                      strokeWidth={2}
+                      dot={false}
+                      activeDot={{ r: 4 }}
                       name="Precipitation"
                     />
-                  </BarChart>
+                  </ComposedChart>
                 </ResponsiveContainer>
               </HistorySection>
 
@@ -322,7 +361,11 @@ export default function ForecastHistory({
                     margin={{ top: 5, right: 5, bottom: 5, left: 0 }}
                   >
                     <XAxis
-                      dataKey="label"
+                      dataKey="modelRunEpoch"
+                      type="number"
+                      scale="time"
+                      domain={["dataMin", "dataMax"]}
+                      tickFormatter={makeTickFormatter(needsTime)}
                       tick={tickStyle}
                       axisLine={axisLineStyle}
                       tickLine={false}
@@ -343,10 +386,7 @@ export default function ForecastHistory({
                         }
                         return [formatWind(value as number), "Wind"];
                       }}
-                      labelFormatter={(_label: string, payload: Array<{ payload?: HistoryDataPoint }>) => {
-                        const point = payload?.[0]?.payload;
-                        return point ? formatTooltipLabel(point.modelRunAt) : _label;
-                      }}
+                      labelFormatter={formatTooltipFromEpoch}
                     />
                     {hasWindBands && (
                       <Area
@@ -365,8 +405,8 @@ export default function ForecastHistory({
                       dataKey="wind"
                       stroke={chartColors.wind}
                       strokeWidth={2}
-                      dot={{ fill: chartColors.wind, r: 3 }}
-                      activeDot={{ r: 5 }}
+                      dot={false}
+                      activeDot={{ r: 4 }}
                       name="Wind"
                     />
                   </ComposedChart>

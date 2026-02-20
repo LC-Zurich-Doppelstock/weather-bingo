@@ -136,8 +136,8 @@ The UI uses a dark theme with warm charcoal neutrals:
 |---|-----|------|-------|
 | 1 | `#2DD4A8` | Emerald mint | Temperature |
 | 2 | `#14B8A6` | Teal | Feels-like temperature |
-| 3 | `#7C8CF5` | Lavender blue | Wind speed |
-| 4 | `#F5A623` | Golden amber | Precipitation |
+| 3 | `#F5A623` | Golden amber | Wind speed |
+| 4 | `#7C8CF5` | Lavender blue | Precipitation |
 | 5 | `#34EBB9` | Bright mint | Humidity |
 | 6 | `#5A7A6E` | Faded green | Cloud cover |
 | 7 | `#D4687A` | Dusty rose | Elevation profile |

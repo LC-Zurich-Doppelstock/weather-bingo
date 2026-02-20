@@ -15,9 +15,6 @@ vi.mock("recharts", () => ({
   ComposedChart: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="composed-chart">{children}</div>
   ),
-  BarChart: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="bar-chart">{children}</div>
-  ),
   Line: () => null,
   Area: () => null,
   Bar: () => null,
