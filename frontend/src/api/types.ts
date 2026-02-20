@@ -69,19 +69,6 @@ export interface ForecastResponse {
   forecast_horizon: string | null; // ISO 8601 — furthest timestamp in yr.no data
 }
 
-export interface ForecastHistoryEntry {
-  fetched_at: string; // ISO 8601
-  yr_model_run_at: string | null; // ISO 8601
-  weather: ForecastWeather;
-}
-
-export interface ForecastHistoryResponse {
-  checkpoint_id: string;
-  checkpoint_name: string;
-  forecast_time: string; // ISO 8601
-  history: ForecastHistoryEntry[];
-}
-
 /** Simplified weather for race-level overview. Uses the unified ForecastWeather type
  *  (detail-only fields will be absent). */
 export interface RaceForecastCheckpoint {

@@ -137,34 +137,7 @@ pub fn parse_gpx(gpx_xml: &str) -> Result<GpxRace, GpxError> {
                         wpt_ele = None;
                         wpt_type = None;
                         wpt_distance_km = None;
-                        // Extract lat/lon attributes
-                        for attr in e.attributes().flatten() {
-                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
-                            let val = std::str::from_utf8(&attr.value).unwrap_or("");
-                            match key {
-                                "lat" => {
-                                    wpt_lat = val.parse().unwrap_or_else(|e| {
-                                        tracing::warn!(
-                                            "Malformed wpt lat='{}': {}, defaulting to 0.0",
-                                            val,
-                                            e,
-                                        );
-                                        0.0
-                                    });
-                                }
-                                "lon" => {
-                                    wpt_lon = val.parse().unwrap_or_else(|e| {
-                                        tracing::warn!(
-                                            "Malformed wpt lon='{}': {}, defaulting to 0.0",
-                                            val,
-                                            e,
-                                        );
-                                        0.0
-                                    });
-                                }
-                                _ => {}
-                            }
-                        }
+                        parse_wpt_attrs(e, &mut wpt_lat, &mut wpt_lon);
                     }
                     "name" if in_wpt && !in_wpt_extensions => {
                         current_element = Some("wpt_name".to_string());
@@ -185,46 +158,18 @@ pub fn parse_gpx(gpx_xml: &str) -> Result<GpxRace, GpxError> {
                 if let Some(ref elem) = current_element {
                     let text = e.unescape().unwrap_or_default().trim().to_string();
                     if !text.is_empty() {
-                        match elem.as_str() {
-                            "metadata_name" => race_name = Some(text),
-                            "wb_year" => {
-                                race_year =
-                                    Some(text.parse().map_err(|_| GpxError::InvalidValue {
-                                        field: "wb:year".to_string(),
-                                        message: format!("not a valid integer: '{}'", text),
-                                    })?);
-                            }
-                            "wb_start_time" => {
-                                race_start_time =
-                                    Some(DateTime::parse_from_rfc3339(&text).map_err(|e| {
-                                        GpxError::InvalidValue {
-                                            field: "wb:start_time".to_string(),
-                                            message: format!(
-                                                "not valid RFC3339: '{}' ({})",
-                                                text, e
-                                            ),
-                                        }
-                                    })?);
-                            }
-                            "wb_distance_km" => {
-                                race_distance_km =
-                                    Some(text.parse().map_err(|_| GpxError::InvalidValue {
-                                        field: "wb:distance_km".to_string(),
-                                        message: format!("not a valid number: '{}'", text),
-                                    })?);
-                            }
-                            "wpt_name" => wpt_name = Some(text),
-                            "wpt_ele" => wpt_ele = Some(text.parse().unwrap_or(0.0)),
-                            "wpt_type" => wpt_type = Some(text),
-                            "wpt_distance_km" => {
-                                wpt_distance_km =
-                                    Some(text.parse().map_err(|_| GpxError::InvalidValue {
-                                        field: "wb:distance_km (waypoint)".to_string(),
-                                        message: format!("not a valid number: '{}'", text),
-                                    })?);
-                            }
-                            _ => {}
-                        }
+                        apply_text_value(
+                            elem,
+                            &text,
+                            &mut race_name,
+                            &mut race_year,
+                            &mut race_start_time,
+                            &mut race_distance_km,
+                            &mut wpt_name,
+                            &mut wpt_ele,
+                            &mut wpt_type,
+                            &mut wpt_distance_km,
+                        )?;
                     }
                 }
             }
@@ -249,25 +194,15 @@ pub fn parse_gpx(gpx_xml: &str) -> Result<GpxRace, GpxError> {
                         in_wb_race = false;
                     }
                     "wpt" => {
-                        // Finalize waypoint — only include if type == "checkpoint"
-                        if wpt_type.as_deref() == Some("checkpoint") {
-                            let name = wpt_name.take().ok_or_else(|| {
-                                GpxError::MissingField("waypoint <name> for checkpoint".to_string())
-                            })?;
-                            let distance_km = wpt_distance_km.ok_or_else(|| {
-                                GpxError::MissingField(format!(
-                                    "wb:distance_km for checkpoint '{}'",
-                                    name
-                                ))
-                            })?;
-                            checkpoints.push(GpxCheckpoint {
-                                name,
-                                latitude: wpt_lat,
-                                longitude: wpt_lon,
-                                elevation_m: wpt_ele.unwrap_or(0.0),
-                                distance_km,
-                            });
-                        }
+                        finalize_waypoint(
+                            &mut wpt_type,
+                            &mut wpt_name,
+                            wpt_lat,
+                            wpt_lon,
+                            wpt_ele,
+                            wpt_distance_km,
+                            &mut checkpoints,
+                        )?;
                         in_wpt = false;
                     }
                     _ => {}
@@ -280,6 +215,127 @@ pub fn parse_gpx(gpx_xml: &str) -> Result<GpxRace, GpxError> {
         buf.clear();
     }
 
+    build_gpx_race(
+        race_name,
+        race_year,
+        race_start_time,
+        race_distance_km,
+        checkpoints,
+        gpx_xml,
+    )
+}
+
+/// Parse `lat` and `lon` attributes from a `<wpt>` element.
+fn parse_wpt_attrs(e: &quick_xml::events::BytesStart<'_>, lat: &mut f64, lon: &mut f64) {
+    for attr in e.attributes().flatten() {
+        let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+        let val = std::str::from_utf8(&attr.value).unwrap_or("");
+        match key {
+            "lat" => {
+                *lat = val.parse().unwrap_or_else(|e| {
+                    tracing::warn!("Malformed wpt lat='{}': {}, defaulting to 0.0", val, e);
+                    0.0
+                });
+            }
+            "lon" => {
+                *lon = val.parse().unwrap_or_else(|e| {
+                    tracing::warn!("Malformed wpt lon='{}': {}, defaulting to 0.0", val, e);
+                    0.0
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Dispatch a captured text value to the appropriate metadata or waypoint field.
+#[allow(clippy::too_many_arguments)]
+fn apply_text_value(
+    elem: &str,
+    text: &str,
+    race_name: &mut Option<String>,
+    race_year: &mut Option<i32>,
+    race_start_time: &mut Option<DateTime<FixedOffset>>,
+    race_distance_km: &mut Option<f64>,
+    wpt_name: &mut Option<String>,
+    wpt_ele: &mut Option<f64>,
+    wpt_type: &mut Option<String>,
+    wpt_distance_km: &mut Option<f64>,
+) -> Result<(), GpxError> {
+    match elem {
+        "metadata_name" => *race_name = Some(text.to_string()),
+        "wb_year" => {
+            *race_year = Some(text.parse().map_err(|_| GpxError::InvalidValue {
+                field: "wb:year".to_string(),
+                message: format!("not a valid integer: '{}'", text),
+            })?);
+        }
+        "wb_start_time" => {
+            *race_start_time =
+                Some(
+                    DateTime::parse_from_rfc3339(text).map_err(|e| GpxError::InvalidValue {
+                        field: "wb:start_time".to_string(),
+                        message: format!("not valid RFC3339: '{}' ({})", text, e),
+                    })?,
+                );
+        }
+        "wb_distance_km" => {
+            *race_distance_km = Some(text.parse().map_err(|_| GpxError::InvalidValue {
+                field: "wb:distance_km".to_string(),
+                message: format!("not a valid number: '{}'", text),
+            })?);
+        }
+        "wpt_name" => *wpt_name = Some(text.to_string()),
+        "wpt_ele" => *wpt_ele = Some(text.parse().unwrap_or(0.0)),
+        "wpt_type" => *wpt_type = Some(text.to_string()),
+        "wpt_distance_km" => {
+            *wpt_distance_km = Some(text.parse().map_err(|_| GpxError::InvalidValue {
+                field: "wb:distance_km (waypoint)".to_string(),
+                message: format!("not a valid number: '{}'", text),
+            })?);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// If the completed waypoint is a checkpoint, validate and push it.
+fn finalize_waypoint(
+    wpt_type: &mut Option<String>,
+    wpt_name: &mut Option<String>,
+    wpt_lat: f64,
+    wpt_lon: f64,
+    wpt_ele: Option<f64>,
+    wpt_distance_km: Option<f64>,
+    checkpoints: &mut Vec<GpxCheckpoint>,
+) -> Result<(), GpxError> {
+    if wpt_type.as_deref() == Some("checkpoint") {
+        let name = wpt_name
+            .take()
+            .ok_or_else(|| GpxError::MissingField("waypoint <name> for checkpoint".to_string()))?;
+        let distance_km = wpt_distance_km.ok_or_else(|| {
+            GpxError::MissingField(format!("wb:distance_km for checkpoint '{}'", name))
+        })?;
+        checkpoints.push(GpxCheckpoint {
+            name,
+            latitude: wpt_lat,
+            longitude: wpt_lon,
+            elevation_m: wpt_ele.unwrap_or(0.0),
+            distance_km,
+        });
+    }
+    Ok(())
+}
+
+/// Validate required fields and build the final `GpxRace`.
+fn build_gpx_race(
+    race_name: Option<String>,
+    race_year: Option<i32>,
+    race_start_time: Option<DateTime<FixedOffset>>,
+    race_distance_km: Option<f64>,
+    checkpoints: Vec<GpxCheckpoint>,
+    gpx_xml: &str,
+) -> Result<GpxRace, GpxError> {
     let name = race_name.ok_or_else(|| GpxError::MissingField("metadata/name".to_string()))?;
     let year = race_year.ok_or_else(|| GpxError::MissingField("wb:year".to_string()))?;
     let start_time =

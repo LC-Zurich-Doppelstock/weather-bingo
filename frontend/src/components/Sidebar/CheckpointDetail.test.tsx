@@ -1,81 +1,29 @@
-import { describe, it, expect, beforeAll, afterEach, afterAll } from "vitest";
+import { describe, it, expect } from "vitest";
 import { render, screen, within } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
-import type { Checkpoint, ForecastResponse } from "../../api/types";
 import CheckpointDetail from "./CheckpointDetail";
-
-const mockCheckpoint: Checkpoint = {
-  id: "cp-1",
-  name: "Salen",
-  distance_km: 0,
-  latitude: 61.16,
-  longitude: 13.27,
-  elevation_m: 400,
-  sort_order: 1,
-};
-
-const mockForecast: ForecastResponse = {
-  checkpoint_id: "cp-1",
-  checkpoint_name: "Salen",
-  forecast_time: "2026-03-01T07:00:00Z",
-  forecast_available: true,
-  fetched_at: "2026-02-28T12:00:00Z",
-  yr_model_run_at: "2026-02-28T06:00:00Z",
-  source: "yr.no",
-  stale: false,
-  forecast_horizon: "2026-03-09T12:00:00Z",
-  weather: {
-    temperature_c: -5.0,
-    temperature_percentile_10_c: -8.0,
-    temperature_percentile_90_c: -2.0,
-    feels_like_c: -10.5,
-    snow_temperature_c: -8.5,
-    wind_speed_ms: 3.2,
-    wind_speed_percentile_10_ms: 1.5,
-    wind_speed_percentile_90_ms: 5.0,
-    wind_direction_deg: 180,
-    wind_gust_ms: 6.1,
-    precipitation_mm: 0.5,
-    precipitation_min_mm: 0.0,
-    precipitation_max_mm: 1.2,
-    precipitation_type: "snow",
-    humidity_pct: 85,
-    dew_point_c: -7.0,
-    cloud_cover_pct: 90,
-    uv_index: 0.5,
-    symbol_code: "heavysnow",
-  },
-};
+import { createWrapper, setupMswLifecycle } from "../../test/helpers";
+import type { ForecastResponse } from "../../api/types";
+import {
+  mockSalenCheckpoint,
+  mockForecastResponse,
+} from "../../test/fixtures";
 
 // MSW server to handle MiniTimeline's forecast requests
 const server = setupServer(
   http.get("/api/v1/forecasts/checkpoint/:checkpointId", () => {
-    return HttpResponse.json(mockForecast);
+    return HttpResponse.json(mockForecastResponse);
   })
 );
 
-beforeAll(() => server.listen());
-afterEach(() => server.resetHandlers());
-afterAll(() => server.close());
-
-function createWrapper() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return function Wrapper({ children }: { children: React.ReactNode }) {
-    return (
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    );
-  };
-}
+setupMswLifecycle(server);
 
 describe("CheckpointDetail", () => {
   it("renders loading skeleton", () => {
     const { container } = render(
       <CheckpointDetail
-        checkpoint={mockCheckpoint}
+        checkpoint={mockSalenCheckpoint}
         passTime="2026-03-01T07:00:00Z"
         forecast={null}
         isLoading={true}
@@ -90,7 +38,7 @@ describe("CheckpointDetail", () => {
   it("renders no-data message when forecast is null and not loading", () => {
     render(
       <CheckpointDetail
-        checkpoint={mockCheckpoint}
+        checkpoint={mockSalenCheckpoint}
         passTime="2026-03-01T07:00:00Z"
         forecast={null}
         isLoading={false}
@@ -105,7 +53,7 @@ describe("CheckpointDetail", () => {
 
   it("renders forecast-unavailable message when weather is null", () => {
     const unavailableForecast: ForecastResponse = {
-      ...mockForecast,
+      ...mockForecastResponse,
       forecast_available: false,
       weather: null,
       fetched_at: null,
@@ -114,7 +62,7 @@ describe("CheckpointDetail", () => {
     };
     render(
       <CheckpointDetail
-        checkpoint={mockCheckpoint}
+        checkpoint={mockSalenCheckpoint}
         passTime="2026-03-01T07:00:00Z"
         forecast={unavailableForecast}
         isLoading={false}
@@ -134,9 +82,9 @@ describe("CheckpointDetail", () => {
   it("renders checkpoint name and distance", () => {
     render(
       <CheckpointDetail
-        checkpoint={mockCheckpoint}
+        checkpoint={mockSalenCheckpoint}
         passTime="2026-03-01T07:00:00Z"
-        forecast={mockForecast}
+        forecast={mockForecastResponse}
         isLoading={false}
 
       />,
@@ -149,9 +97,9 @@ describe("CheckpointDetail", () => {
   it("renders temperature data", () => {
     render(
       <CheckpointDetail
-        checkpoint={mockCheckpoint}
+        checkpoint={mockSalenCheckpoint}
         passTime="2026-03-01T07:00:00Z"
-        forecast={mockForecast}
+        forecast={mockForecastResponse}
         isLoading={false}
 
       />,
@@ -164,25 +112,25 @@ describe("CheckpointDetail", () => {
   it("renders snow temperature with info popover button", () => {
     render(
       <CheckpointDetail
-        checkpoint={mockCheckpoint}
+        checkpoint={mockSalenCheckpoint}
         passTime="2026-03-01T07:00:00Z"
-        forecast={mockForecast}
+        forecast={mockForecastResponse}
         isLoading={false}
       />,
       { wrapper: createWrapper() }
     );
     const snowGroup = screen.getByRole("group", { name: "Snow Temperature" });
     expect(snowGroup).toBeInTheDocument();
-    expect(screen.getByText("-8°C")).toBeInTheDocument();
+    expect(within(snowGroup).getByText("-7°C")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Snow temperature info" })).toBeInTheDocument();
   });
 
   it("renders wind data with direction", () => {
     render(
       <CheckpointDetail
-        checkpoint={mockCheckpoint}
+        checkpoint={mockSalenCheckpoint}
         passTime="2026-03-01T07:00:00Z"
-        forecast={mockForecast}
+        forecast={mockForecastResponse}
         isLoading={false}
 
       />,
@@ -195,9 +143,9 @@ describe("CheckpointDetail", () => {
   it("renders precipitation type and amount", () => {
     render(
       <CheckpointDetail
-        checkpoint={mockCheckpoint}
+        checkpoint={mockSalenCheckpoint}
         passTime="2026-03-01T07:00:00Z"
-        forecast={mockForecast}
+        forecast={mockForecastResponse}
         isLoading={false}
 
       />,
@@ -211,9 +159,9 @@ describe("CheckpointDetail", () => {
   it("renders humidity and cloud cover", () => {
     render(
       <CheckpointDetail
-        checkpoint={mockCheckpoint}
+        checkpoint={mockSalenCheckpoint}
         passTime="2026-03-01T07:00:00Z"
-        forecast={mockForecast}
+        forecast={mockForecastResponse}
         isLoading={false}
 
       />,
@@ -226,9 +174,9 @@ describe("CheckpointDetail", () => {
   it("renders UV index when available", () => {
     render(
       <CheckpointDetail
-        checkpoint={mockCheckpoint}
+        checkpoint={mockSalenCheckpoint}
         passTime="2026-03-01T07:00:00Z"
-        forecast={mockForecast}
+        forecast={mockForecastResponse}
         isLoading={false}
 
       />,
@@ -238,10 +186,10 @@ describe("CheckpointDetail", () => {
   });
 
   it("shows stale data badge when forecast is stale", () => {
-    const staleForecast = { ...mockForecast, stale: true };
+    const staleForecast = { ...mockForecastResponse, stale: true };
     render(
       <CheckpointDetail
-        checkpoint={mockCheckpoint}
+        checkpoint={mockSalenCheckpoint}
         passTime="2026-03-01T07:00:00Z"
         forecast={staleForecast}
         isLoading={false}
@@ -258,9 +206,9 @@ describe("CheckpointDetail", () => {
   it("does not show stale badge for fresh data", () => {
     render(
       <CheckpointDetail
-        checkpoint={mockCheckpoint}
+        checkpoint={mockSalenCheckpoint}
         passTime="2026-03-01T07:00:00Z"
-        forecast={mockForecast}
+        forecast={mockForecastResponse}
         isLoading={false}
 
       />,
@@ -272,9 +220,9 @@ describe("CheckpointDetail", () => {
   it("shows source and model run metadata", () => {
     render(
       <CheckpointDetail
-        checkpoint={mockCheckpoint}
+        checkpoint={mockSalenCheckpoint}
         passTime="2026-03-01T07:00:00Z"
-        forecast={mockForecast}
+        forecast={mockForecastResponse}
         isLoading={false}
 
       />,
@@ -287,9 +235,9 @@ describe("CheckpointDetail", () => {
   it("renders weather rows with aria group labels", () => {
     render(
       <CheckpointDetail
-        checkpoint={mockCheckpoint}
+        checkpoint={mockSalenCheckpoint}
         passTime="2026-03-01T07:00:00Z"
-        forecast={mockForecast}
+        forecast={mockForecastResponse}
         isLoading={false}
 
       />,

@@ -3,7 +3,8 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import ElevationProfile from "./ElevationProfile";
 import type { CoursePoint, Checkpoint } from "../../api/types";
 
-// Mock recharts to avoid canvas rendering issues in jsdom
+// Mock recharts to avoid canvas rendering issues in jsdom.
+// Factory must be self-contained (vi.mock is hoisted above imports).
 vi.mock("recharts", () => ({
   ResponsiveContainer: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="responsive-container">{children}</div>
@@ -26,6 +27,8 @@ const mockCourse: CoursePoint[] = [
   { lat: 61.10, lon: 13.50, ele: 450 },
 ];
 
+// ElevationProfile uses slightly different checkpoint data (different names/values),
+// so keep these as local overrides rather than importing the shared ones.
 const mockCheckpoints: Checkpoint[] = [
   {
     id: "cp-1",

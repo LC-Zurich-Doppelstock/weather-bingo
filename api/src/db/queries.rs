@@ -1,23 +1,59 @@
 use chrono::{DateTime, Utc};
-use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::models::{Checkpoint, Forecast, Race, YrCachedResponse};
+use crate::helpers::f64_to_decimal_full;
+use crate::services::gpx::GpxRace;
 
 /// Forecast time tolerance window (hours). SQL queries use a ±N hour BETWEEN
 /// range so the composite index (checkpoint_id, forecast_time, fetched_at DESC)
 /// drives the scan. This compile-time constant is interpolated into SQL via
 /// `format!` — this is safe because it's not user input. PostgreSQL doesn't
 /// support `$N` bind parameters inside `INTERVAL` literals.
-pub const FORECAST_TIME_TOLERANCE_HOURS: i32 = 3;
+pub(crate) const FORECAST_TIME_TOLERANCE_HOURS: i32 = 3;
+
+/// Forecast SELECT column list (no table alias).
+///
+/// All columns from the `forecasts` table, used in SELECT and RETURNING clauses.
+/// Keep in sync with the `Forecast` model struct in `models.rs`.
+const FORECAST_COLS: &str = "\
+    id, checkpoint_id, forecast_time, fetched_at, source, \
+    temperature_c, temperature_percentile_10_c, temperature_percentile_90_c, \
+    wind_speed_ms, wind_speed_percentile_10_ms, wind_speed_percentile_90_ms, \
+    wind_direction_deg, wind_gust_ms, \
+    precipitation_mm, precipitation_min_mm, precipitation_max_mm, \
+    humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code, \
+    feels_like_c, precipitation_type, snow_temperature_c, yr_model_run_at, created_at";
+
+/// Forecast SELECT column list with `f.` table alias prefix.
+///
+/// Same columns as `FORECAST_COLS` but with `f.` prefix for use in JOINs.
+const FORECAST_COLS_F: &str = "\
+    f.id, f.checkpoint_id, f.forecast_time, f.fetched_at, f.source, \
+    f.temperature_c, f.temperature_percentile_10_c, f.temperature_percentile_90_c, \
+    f.wind_speed_ms, f.wind_speed_percentile_10_ms, f.wind_speed_percentile_90_ms, \
+    f.wind_direction_deg, f.wind_gust_ms, \
+    f.precipitation_mm, f.precipitation_min_mm, f.precipitation_max_mm, \
+    f.humidity_pct, f.dew_point_c, f.cloud_cover_pct, f.uv_index, f.symbol_code, \
+    f.feels_like_c, f.precipitation_type, f.snow_temperature_c, f.yr_model_run_at, f.created_at";
+
+/// Forecast INSERT column list (excludes `id` and `created_at` which are auto-generated).
+const FORECAST_INSERT_COLS: &str = "\
+    id, checkpoint_id, forecast_time, fetched_at, source, \
+    temperature_c, temperature_percentile_10_c, temperature_percentile_90_c, \
+    wind_speed_ms, wind_speed_percentile_10_ms, wind_speed_percentile_90_ms, \
+    wind_direction_deg, wind_gust_ms, \
+    precipitation_mm, precipitation_min_mm, precipitation_max_mm, \
+    humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code, \
+    feels_like_c, precipitation_type, snow_temperature_c, yr_model_run_at";
 
 /// Internal helper for the batch forecast query — includes an `idx` column
 /// from `WITH ORDINALITY` to preserve input ordering. All forecast fields are
 /// `Option` because of the LEFT JOIN.
 #[derive(Debug, sqlx::FromRow)]
-pub struct ForecastWithIdx {
+pub(crate) struct ForecastWithIdx {
     pub idx: i64,
 
     // All forecast columns are Option due to LEFT JOIN LATERAL
@@ -83,46 +119,33 @@ impl ForecastWithIdx {
         })
     }
 }
-use crate::services::gpx::GpxRace;
-
-/// Convert an f64 to a `Decimal`, falling back to zero for non-finite values (NaN, ±Inf).
-fn f64_to_dec(v: f64) -> Decimal {
-    if !v.is_finite() {
-        tracing::warn!(
-            "f64_to_dec received non-finite value {}, defaulting to 0",
-            v
-        );
-        return Decimal::ZERO;
-    }
-    Decimal::from_f64(v).unwrap_or_else(|| Decimal::new(v as i64, 0))
-}
 
 /// Parameters for inserting a new forecast record.
-pub struct InsertForecastParams {
-    pub checkpoint_id: Uuid,
-    pub forecast_time: DateTime<Utc>,
-    pub fetched_at: DateTime<Utc>,
-    pub source: String,
-    pub temperature_c: Decimal,
-    pub temperature_percentile_10_c: Option<Decimal>,
-    pub temperature_percentile_90_c: Option<Decimal>,
-    pub wind_speed_ms: Decimal,
-    pub wind_speed_percentile_10_ms: Option<Decimal>,
-    pub wind_speed_percentile_90_ms: Option<Decimal>,
-    pub wind_direction_deg: Decimal,
-    pub wind_gust_ms: Option<Decimal>,
-    pub precipitation_mm: Decimal,
-    pub precipitation_min_mm: Option<Decimal>,
-    pub precipitation_max_mm: Option<Decimal>,
-    pub humidity_pct: Decimal,
-    pub dew_point_c: Decimal,
-    pub cloud_cover_pct: Decimal,
-    pub uv_index: Option<Decimal>,
-    pub symbol_code: String,
-    pub feels_like_c: Decimal,
-    pub precipitation_type: String,
-    pub snow_temperature_c: Decimal,
-    pub yr_model_run_at: Option<DateTime<Utc>>,
+pub(crate) struct InsertForecastParams {
+    pub(crate) checkpoint_id: Uuid,
+    pub(crate) forecast_time: DateTime<Utc>,
+    pub(crate) fetched_at: DateTime<Utc>,
+    pub(crate) source: String,
+    pub(crate) temperature_c: Decimal,
+    pub(crate) temperature_percentile_10_c: Option<Decimal>,
+    pub(crate) temperature_percentile_90_c: Option<Decimal>,
+    pub(crate) wind_speed_ms: Decimal,
+    pub(crate) wind_speed_percentile_10_ms: Option<Decimal>,
+    pub(crate) wind_speed_percentile_90_ms: Option<Decimal>,
+    pub(crate) wind_direction_deg: Decimal,
+    pub(crate) wind_gust_ms: Option<Decimal>,
+    pub(crate) precipitation_mm: Decimal,
+    pub(crate) precipitation_min_mm: Option<Decimal>,
+    pub(crate) precipitation_max_mm: Option<Decimal>,
+    pub(crate) humidity_pct: Decimal,
+    pub(crate) dew_point_c: Decimal,
+    pub(crate) cloud_cover_pct: Decimal,
+    pub(crate) uv_index: Option<Decimal>,
+    pub(crate) symbol_code: String,
+    pub(crate) feels_like_c: Decimal,
+    pub(crate) precipitation_type: String,
+    pub(crate) snow_temperature_c: Decimal,
+    pub(crate) yr_model_run_at: Option<DateTime<Utc>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -130,7 +153,7 @@ pub struct InsertForecastParams {
 // ---------------------------------------------------------------------------
 
 /// Get a cached yr.no response for a checkpoint, only if it hasn't expired.
-pub async fn get_yr_cached_response(
+pub(crate) async fn get_yr_cached_response(
     pool: &PgPool,
     checkpoint_id: Uuid,
 ) -> Result<Option<YrCachedResponse>, sqlx::Error> {
@@ -147,7 +170,7 @@ pub async fn get_yr_cached_response(
 }
 
 /// Get a cached yr.no response for a checkpoint regardless of expiry (for If-Modified-Since).
-pub async fn get_yr_cached_response_any(
+pub(crate) async fn get_yr_cached_response_any(
     pool: &PgPool,
     checkpoint_id: Uuid,
 ) -> Result<Option<YrCachedResponse>, sqlx::Error> {
@@ -165,7 +188,7 @@ pub async fn get_yr_cached_response_any(
 /// Update expires_at and optionally last_modified on a yr.no cached response.
 /// Used when yr.no returns 304 Not Modified with updated caching headers.
 /// If `last_modified` is None, the existing value is preserved via COALESCE.
-pub async fn update_yr_cache_expiry_and_last_modified(
+pub(crate) async fn update_yr_cache_expiry_and_last_modified(
     pool: &PgPool,
     checkpoint_id: Uuid,
     expires_at: DateTime<Utc>,
@@ -185,7 +208,7 @@ pub async fn update_yr_cache_expiry_and_last_modified(
 
 /// Upsert (insert or update) a yr.no cached response for a checkpoint.
 #[allow(clippy::too_many_arguments)]
-pub async fn upsert_yr_cached_response(
+pub(crate) async fn upsert_yr_cached_response(
     pool: &PgPool,
     checkpoint_id: Uuid,
     latitude: Decimal,
@@ -226,7 +249,7 @@ pub async fn upsert_yr_cached_response(
 // ---------------------------------------------------------------------------
 
 /// Get a race summary (no GPX blob) — lightweight existence check + metadata.
-pub async fn get_race_summary(pool: &PgPool, id: Uuid) -> Result<Option<Race>, sqlx::Error> {
+pub(crate) async fn get_race_summary(pool: &PgPool, id: Uuid) -> Result<Option<Race>, sqlx::Error> {
     sqlx::query_as::<_, Race>(
         "SELECT id, name, year, start_time, distance_km FROM races WHERE id = $1",
     )
@@ -236,7 +259,7 @@ pub async fn get_race_summary(pool: &PgPool, id: Uuid) -> Result<Option<Race>, s
 }
 
 /// List all races (summary only, no GPX).
-pub async fn list_races(pool: &PgPool) -> Result<Vec<Race>, sqlx::Error> {
+pub(crate) async fn list_races(pool: &PgPool) -> Result<Vec<Race>, sqlx::Error> {
     sqlx::query_as::<_, Race>(
         "SELECT id, name, year, start_time, distance_km FROM races ORDER BY year DESC, name",
     )
@@ -245,7 +268,10 @@ pub async fn list_races(pool: &PgPool) -> Result<Vec<Race>, sqlx::Error> {
 }
 
 /// Get just the GPX XML for a race (for course coordinate extraction).
-pub async fn get_race_course_gpx(pool: &PgPool, id: Uuid) -> Result<Option<String>, sqlx::Error> {
+pub(crate) async fn get_race_course_gpx(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<Option<String>, sqlx::Error> {
     let row: Option<(String,)> = sqlx::query_as("SELECT course_gpx FROM races WHERE id = $1")
         .bind(id)
         .fetch_optional(pool)
@@ -254,7 +280,10 @@ pub async fn get_race_course_gpx(pool: &PgPool, id: Uuid) -> Result<Option<Strin
 }
 
 /// Get all checkpoints for a race, ordered by sort_order.
-pub async fn get_checkpoints(pool: &PgPool, race_id: Uuid) -> Result<Vec<Checkpoint>, sqlx::Error> {
+pub(crate) async fn get_checkpoints(
+    pool: &PgPool,
+    race_id: Uuid,
+) -> Result<Vec<Checkpoint>, sqlx::Error> {
     sqlx::query_as::<_, Checkpoint>(
         "SELECT id, race_id, name, distance_km, latitude, longitude, elevation_m, sort_order
          FROM checkpoints
@@ -271,19 +300,13 @@ pub async fn get_checkpoints(pool: &PgPool, race_id: Uuid) -> Result<Vec<Checkpo
 /// Uses a BETWEEN range (±3 hours) so the composite index on
 /// (checkpoint_id, forecast_time, fetched_at DESC) is used for the scan,
 /// then sorts by closeness within that window.
-pub async fn get_latest_forecast(
+pub(crate) async fn get_latest_forecast(
     pool: &PgPool,
     checkpoint_id: Uuid,
     forecast_time: DateTime<Utc>,
 ) -> Result<Option<Forecast>, sqlx::Error> {
     let query = format!(
-        "SELECT id, checkpoint_id, forecast_time, fetched_at, source,
-                temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
-                wind_speed_ms, wind_speed_percentile_10_ms, wind_speed_percentile_90_ms,
-                wind_direction_deg, wind_gust_ms,
-                precipitation_mm, precipitation_min_mm, precipitation_max_mm,
-                humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-                feels_like_c, precipitation_type, snow_temperature_c, yr_model_run_at, created_at
+        "SELECT {FORECAST_COLS}
          FROM forecasts
          WHERE checkpoint_id = $1
            AND forecast_time BETWEEN $2 - INTERVAL '{h} hours' AND $2 + INTERVAL '{h} hours'
@@ -304,7 +327,7 @@ pub async fn get_latest_forecast(
 ///
 /// Returns one Forecast per input pair (in the same order), or None if no
 /// forecast exists for that pair. Executes as a single query using LATERAL JOIN.
-pub async fn get_latest_forecasts_batch(
+pub(crate) async fn get_latest_forecasts_batch(
     pool: &PgPool,
     pairs: &[(Uuid, DateTime<Utc>)],
 ) -> Result<Vec<Option<Forecast>>, sqlx::Error> {
@@ -318,13 +341,7 @@ pub async fn get_latest_forecasts_batch(
     let query = format!(
         "SELECT
             p.idx,
-            f.id, f.checkpoint_id, f.forecast_time, f.fetched_at, f.source,
-            f.temperature_c, f.temperature_percentile_10_c, f.temperature_percentile_90_c,
-            f.wind_speed_ms, f.wind_speed_percentile_10_ms, f.wind_speed_percentile_90_ms,
-            f.wind_direction_deg, f.wind_gust_ms,
-            f.precipitation_mm, f.precipitation_min_mm, f.precipitation_max_mm,
-            f.humidity_pct, f.dew_point_c, f.cloud_cover_pct, f.uv_index, f.symbol_code,
-            f.feels_like_c, f.precipitation_type, f.snow_temperature_c, f.yr_model_run_at, f.created_at
+            {FORECAST_COLS_F}
          FROM UNNEST($1::uuid[], $2::timestamptz[])
               WITH ORDINALITY AS p(cp_id, ft, idx)
          LEFT JOIN LATERAL (
@@ -368,24 +385,18 @@ pub async fn get_latest_forecasts_batch(
 
 /// Maximum number of history entries returned per checkpoint.
 /// Prevents unbounded result sets for long-running forecast tracking.
-pub const MAX_FORECAST_HISTORY_ENTRIES: i32 = 200;
+pub(crate) const MAX_FORECAST_HISTORY_ENTRIES: i32 = 200;
 
 /// Get forecast history for a checkpoint at a specific forecast time.
 /// Returns all fetched versions (up to `MAX_FORECAST_HISTORY_ENTRIES`),
 /// ordered by fetched_at ascending.
-pub async fn get_forecast_history(
+pub(crate) async fn get_forecast_history(
     pool: &PgPool,
     checkpoint_id: Uuid,
     forecast_time: DateTime<Utc>,
 ) -> Result<Vec<Forecast>, sqlx::Error> {
     let query = format!(
-        "SELECT id, checkpoint_id, forecast_time, fetched_at, source,
-                temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
-                wind_speed_ms, wind_speed_percentile_10_ms, wind_speed_percentile_90_ms,
-                wind_direction_deg, wind_gust_ms,
-                precipitation_mm, precipitation_min_mm, precipitation_max_mm,
-                humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-                feels_like_c, precipitation_type, snow_temperature_c, yr_model_run_at, created_at
+        "SELECT {FORECAST_COLS}
          FROM forecasts
          WHERE checkpoint_id = $1
            AND forecast_time = (
@@ -417,65 +428,43 @@ pub async fn get_forecast_history(
 ///
 /// Returns `Some(Forecast)` when a new row was inserted, or `None` when
 /// it already existed (deduplicated).
-pub async fn insert_forecast(
+pub(crate) async fn insert_forecast(
     pool: &PgPool,
     p: InsertForecastParams,
 ) -> Result<Option<Forecast>, sqlx::Error> {
     // Choose the appropriate ON CONFLICT clause based on whether yr_model_run_at is set.
     // PostgreSQL requires the conflict target to match a specific unique index.
     let sql = if p.yr_model_run_at.is_some() {
-        "INSERT INTO forecasts (
-            id, checkpoint_id, forecast_time, fetched_at, source,
-            temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
-            wind_speed_ms, wind_speed_percentile_10_ms, wind_speed_percentile_90_ms,
-            wind_direction_deg, wind_gust_ms,
-            precipitation_mm, precipitation_min_mm, precipitation_max_mm,
-            humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-            feels_like_c, precipitation_type, snow_temperature_c, yr_model_run_at
-         ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $4,
-            $5, $6, $7, $8, $9, $10, $11, $12,
-            $13, $14, $15, $16, $17, $18, $19, $20,
-            $21, $22, $23, $24
-         )
-         ON CONFLICT (checkpoint_id, forecast_time, yr_model_run_at)
-            WHERE yr_model_run_at IS NOT NULL
-         DO NOTHING
-         RETURNING id, checkpoint_id, forecast_time, fetched_at, source,
-                   temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
-                   wind_speed_ms, wind_speed_percentile_10_ms, wind_speed_percentile_90_ms,
-                   wind_direction_deg, wind_gust_ms,
-                   precipitation_mm, precipitation_min_mm, precipitation_max_mm,
-                   humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-                   feels_like_c, precipitation_type, snow_temperature_c, yr_model_run_at, created_at"
+        format!(
+            "INSERT INTO forecasts ({FORECAST_INSERT_COLS})
+             VALUES (
+                gen_random_uuid(), $1, $2, $3, $4,
+                $5, $6, $7, $8, $9, $10, $11, $12,
+                $13, $14, $15, $16, $17, $18, $19, $20,
+                $21, $22, $23, $24
+             )
+             ON CONFLICT (checkpoint_id, forecast_time, yr_model_run_at)
+                WHERE yr_model_run_at IS NOT NULL
+             DO NOTHING
+             RETURNING {FORECAST_COLS}"
+        )
     } else {
-        "INSERT INTO forecasts (
-            id, checkpoint_id, forecast_time, fetched_at, source,
-            temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
-            wind_speed_ms, wind_speed_percentile_10_ms, wind_speed_percentile_90_ms,
-            wind_direction_deg, wind_gust_ms,
-            precipitation_mm, precipitation_min_mm, precipitation_max_mm,
-            humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-            feels_like_c, precipitation_type, snow_temperature_c, yr_model_run_at
-         ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $4,
-            $5, $6, $7, $8, $9, $10, $11, $12,
-            $13, $14, $15, $16, $17, $18, $19, $20,
-            $21, $22, $23, $24
-         )
-         ON CONFLICT (checkpoint_id, forecast_time)
-            WHERE yr_model_run_at IS NULL
-         DO NOTHING
-         RETURNING id, checkpoint_id, forecast_time, fetched_at, source,
-                   temperature_c, temperature_percentile_10_c, temperature_percentile_90_c,
-                   wind_speed_ms, wind_speed_percentile_10_ms, wind_speed_percentile_90_ms,
-                   wind_direction_deg, wind_gust_ms,
-                   precipitation_mm, precipitation_min_mm, precipitation_max_mm,
-                   humidity_pct, dew_point_c, cloud_cover_pct, uv_index, symbol_code,
-                   feels_like_c, precipitation_type, snow_temperature_c, yr_model_run_at, created_at"
+        format!(
+            "INSERT INTO forecasts ({FORECAST_INSERT_COLS})
+             VALUES (
+                gen_random_uuid(), $1, $2, $3, $4,
+                $5, $6, $7, $8, $9, $10, $11, $12,
+                $13, $14, $15, $16, $17, $18, $19, $20,
+                $21, $22, $23, $24
+             )
+             ON CONFLICT (checkpoint_id, forecast_time)
+                WHERE yr_model_run_at IS NULL
+             DO NOTHING
+             RETURNING {FORECAST_COLS}"
+        )
     };
 
-    sqlx::query_as::<_, Forecast>(sql)
+    sqlx::query_as::<_, Forecast>(&sql)
         .bind(p.checkpoint_id)
         .bind(p.forecast_time)
         .bind(p.fetched_at)
@@ -505,7 +494,7 @@ pub async fn insert_forecast(
 }
 
 /// Get a single checkpoint by ID.
-pub async fn get_checkpoint(
+pub(crate) async fn get_checkpoint(
     pool: &PgPool,
     checkpoint_id: Uuid,
 ) -> Result<Option<Checkpoint>, sqlx::Error> {
@@ -525,8 +514,11 @@ pub async fn get_checkpoint(
 /// Deletes orphan checkpoints that no longer exist in the GPX.
 /// All operations run within a single transaction.
 /// Returns the race UUID (existing or newly created).
-pub async fn upsert_race_from_gpx(pool: &PgPool, race: &GpxRace) -> Result<Uuid, sqlx::Error> {
-    let distance_km = f64_to_dec(race.distance_km);
+pub(crate) async fn upsert_race_from_gpx(
+    pool: &PgPool,
+    race: &GpxRace,
+) -> Result<Uuid, sqlx::Error> {
+    let distance_km = f64_to_decimal_full(race.distance_km);
     let start_time_utc: chrono::DateTime<chrono::Utc> = race.start_time.into();
 
     let mut tx = pool.begin().await?;
@@ -554,10 +546,10 @@ pub async fn upsert_race_from_gpx(pool: &PgPool, race: &GpxRace) -> Result<Uuid,
 
     // Upsert each checkpoint
     for (i, cp) in race.checkpoints.iter().enumerate() {
-        let cp_distance = f64_to_dec(cp.distance_km);
-        let cp_lat = f64_to_dec(cp.latitude);
-        let cp_lon = f64_to_dec(cp.longitude);
-        let cp_ele = f64_to_dec(cp.elevation_m);
+        let cp_distance = f64_to_decimal_full(cp.distance_km);
+        let cp_lat = f64_to_decimal_full(cp.latitude);
+        let cp_lon = f64_to_decimal_full(cp.longitude);
+        let cp_ele = f64_to_decimal_full(cp.elevation_m);
         let sort_order = i as i32;
 
         sqlx::query(
@@ -596,38 +588,68 @@ pub async fn upsert_race_from_gpx(pool: &PgPool, race: &GpxRace) -> Result<Uuid,
     Ok(race_id)
 }
 
+// ---------------------------------------------------------------------------
+// Poller queries
+// ---------------------------------------------------------------------------
+
+/// A race with all its checkpoints, used by the background poller.
+pub(crate) struct RaceWithCheckpoints {
+    pub(crate) race: Race,
+    pub(crate) checkpoints: Vec<Checkpoint>,
+}
+
+/// Get all races with start_time within the next `lookahead_days` days,
+/// along with their checkpoints. Used by the background poller to know
+/// which checkpoints need proactive forecast fetching.
+pub(crate) async fn get_upcoming_races_with_checkpoints(
+    pool: &PgPool,
+    lookahead_days: i64,
+) -> Result<Vec<RaceWithCheckpoints>, sqlx::Error> {
+    let races = sqlx::query_as::<_, Race>(
+        "SELECT id, name, year, start_time, distance_km
+         FROM races
+         WHERE start_time BETWEEN NOW() - INTERVAL '1 day'
+           AND NOW() + $1 * INTERVAL '1 day'
+         ORDER BY start_time",
+    )
+    .bind(lookahead_days as f64)
+    .fetch_all(pool)
+    .await?;
+
+    let mut results = Vec::with_capacity(races.len());
+    for race in races {
+        let checkpoints = get_checkpoints(pool, race.id).await?;
+        results.push(RaceWithCheckpoints { race, checkpoints });
+    }
+    Ok(results)
+}
+
+/// Get the earliest expires_at timestamp across yr_responses for the given checkpoint IDs.
+/// Returns None if no yr_responses rows exist for any of the checkpoint IDs.
+pub(crate) async fn get_earliest_expiry(
+    pool: &PgPool,
+    checkpoint_ids: &[Uuid],
+) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
+    if checkpoint_ids.is_empty() {
+        return Ok(None);
+    }
+    let row: Option<(Option<DateTime<Utc>>,)> =
+        sqlx::query_as("SELECT MIN(expires_at) FROM yr_responses WHERE checkpoint_id = ANY($1)")
+            .bind(checkpoint_ids)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.and_then(|r| r.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_f64_to_dec_normal() {
-        let d = f64_to_dec(3.14);
-        assert!(
-            d > Decimal::ZERO,
-            "Normal float should produce positive Decimal"
-        );
-    }
+    // f64_to_decimal_full tests are now in helpers.rs
+    // Tests here should focus on query-specific logic.
 
     #[test]
-    fn test_f64_to_dec_nan() {
-        let d = f64_to_dec(f64::NAN);
-        assert_eq!(d, Decimal::ZERO, "NaN should be converted to 0");
-    }
-
-    #[test]
-    fn test_f64_to_dec_infinity() {
-        let d = f64_to_dec(f64::INFINITY);
-        assert_eq!(d, Decimal::ZERO, "Infinity should be converted to 0");
-    }
-
-    #[test]
-    fn test_f64_to_dec_neg_infinity() {
-        let d = f64_to_dec(f64::NEG_INFINITY);
-        assert_eq!(
-            d,
-            Decimal::ZERO,
-            "Negative infinity should be converted to 0"
-        );
+    fn test_forecast_time_tolerance_hours_is_positive() {
+        assert!(FORECAST_TIME_TOLERANCE_HOURS > 0);
     }
 }

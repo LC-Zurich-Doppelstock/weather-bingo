@@ -11,19 +11,9 @@ import {
 import { useQueries } from "@tanstack/react-query";
 import { fetchForecast } from "../../api/client";
 import { chartColors, colors, uncertaintyOpacity } from "../../styles/theme";
+import { tooltipStyle, tickStyle, axisLineStyle } from "../../styles/chartStyles";
 import { formatTemp, formatPrecip, formatTime, formatWind, windDirectionLabel } from "../../utils/formatting";
 
-// Static style objects hoisted outside the component to avoid recreation on every render
-const tooltipStyle = {
-  backgroundColor: colors.surface,
-  border: `1px solid ${colors.border}`,
-  borderRadius: "6px",
-  color: colors.textPrimary,
-  fontSize: "12px",
-} as const;
-
-const tickStyle = { fill: colors.textMuted, fontSize: 10 } as const;
-const axisLineStyle = { stroke: colors.border } as const;
 const tempDotStyle = { fill: chartColors.temperature, r: 3 } as const;
 const tempActiveDot = { r: 5 } as const;
 const windDotStyle = { fill: chartColors.wind, r: 2 } as const;

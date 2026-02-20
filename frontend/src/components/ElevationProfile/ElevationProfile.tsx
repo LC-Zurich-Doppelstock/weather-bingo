@@ -11,20 +11,9 @@ import {
 import type { CategoricalChartState } from "recharts/types/chart/types";
 import type { CoursePoint, Checkpoint } from "../../api/types";
 import { chartColors, colors, uncertaintyOpacity } from "../../styles/theme";
+import { tooltipStyle, tickStyle, axisLineStyle } from "../../styles/chartStyles";
 import { computeElevationProfile } from "../../utils/geo";
 import type { ElevationPoint } from "../../utils/geo";
-
-// Static style objects (same pattern as CourseOverview)
-const tooltipStyle = {
-  backgroundColor: colors.surface,
-  border: `1px solid ${colors.border}`,
-  borderRadius: "6px",
-  color: colors.textPrimary,
-  fontSize: "12px",
-} as const;
-
-const tickStyle = { fill: colors.textMuted, fontSize: 10 } as const;
-const axisLineStyle = { stroke: colors.border } as const;
 
 /** Chevron-down SVG path (rotates when collapsed). */
 const ChevronIcon = ({ collapsed }: { collapsed: boolean }) => (

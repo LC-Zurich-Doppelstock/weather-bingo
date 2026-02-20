@@ -1,6 +1,5 @@
 use axum::extract::{Path, State};
 use axum::Json;
-use rust_decimal::prelude::ToPrimitive;
 use serde::Serialize;
 use sqlx::PgPool;
 use utoipa::ToSchema;
@@ -8,6 +7,7 @@ use uuid::Uuid;
 
 use crate::db::{models, queries};
 use crate::errors::{AppError, ErrorResponse};
+use crate::helpers::dec_to_f64;
 use crate::services::gpx::CoursePoint;
 
 /// Response type for GET /api/v1/races (list, without GPX).
@@ -32,7 +32,7 @@ impl From<models::Race> for RaceListItem {
             name: r.name,
             year: r.year,
             start_time: r.start_time.to_rfc3339(),
-            distance_km: r.distance_km.to_f64().unwrap_or(0.0),
+            distance_km: dec_to_f64(r.distance_km),
         }
     }
 }
@@ -61,10 +61,10 @@ impl From<models::Checkpoint> for CheckpointResponse {
         Self {
             id: c.id,
             name: c.name,
-            distance_km: c.distance_km.to_f64().unwrap_or(0.0),
-            latitude: c.latitude.to_f64().unwrap_or(0.0),
-            longitude: c.longitude.to_f64().unwrap_or(0.0),
-            elevation_m: c.elevation_m.to_f64().unwrap_or(0.0),
+            distance_km: dec_to_f64(c.distance_km),
+            latitude: dec_to_f64(c.latitude),
+            longitude: dec_to_f64(c.longitude),
+            elevation_m: dec_to_f64(c.elevation_m),
             sort_order: c.sort_order,
         }
     }

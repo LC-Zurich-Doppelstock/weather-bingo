@@ -7,11 +7,13 @@ use chrono::{DateTime, Utc};
 use reqwest::header::{HeaderMap, HeaderValue, IF_MODIFIED_SINCE, USER_AGENT};
 use rust_decimal::Decimal;
 use serde::Deserialize;
-use std::str::FromStr;
 
 use crate::errors::AppError;
+use crate::helpers::{f64_to_decimal_1dp, opt_f64_to_decimal_1dp};
 
 const YR_API_URL: &str = "https://api.met.no/weatherapi/locationforecast/2.0/complete";
+/// HTTP request timeout for yr.no API calls (seconds).
+const YR_HTTP_TIMEOUT_SECS: u64 = 30;
 
 /// Temporal resolution of a yr.no timeseries entry, determined by which
 /// period blocks (`next_1_hours` / `next_6_hours`) are present.
@@ -177,24 +179,17 @@ struct YrPeriodDetails {
 }
 
 fn f64_to_decimal(v: f64) -> Decimal {
-    if !v.is_finite() {
-        tracing::warn!(
-            "f64_to_decimal received non-finite value {}, defaulting to 0",
-            v
-        );
-        return Decimal::ZERO;
-    }
-    Decimal::from_str(&format!("{:.1}", v)).unwrap_or_default()
+    f64_to_decimal_1dp(v)
 }
 
 fn opt_f64_to_decimal(v: Option<f64>) -> Option<Decimal> {
-    v.map(f64_to_decimal)
+    opt_f64_to_decimal_1dp(v)
 }
 
 impl YrClient {
     pub fn new(user_agent: &str) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(YR_HTTP_TIMEOUT_SECS))
             .build()
             .expect("Failed to build HTTP client");
         Self {
@@ -541,6 +536,7 @@ fn httpdate_parse(s: &str) -> Result<DateTime<Utc>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     /// Test-only convenience wrapper: extract a forecast for a single time.
     fn extract_forecast_at_time(

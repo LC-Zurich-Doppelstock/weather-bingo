@@ -37,3 +37,9 @@ export const chartColors = {
 
 // Uncertainty bands use same colour at 15% opacity
 export const uncertaintyOpacity = 0.15;
+
+/**
+ * Opacity for secondary line overlays (e.g. "feels like" line on temperature chart).
+ * Visually lighter than the primary data line but clearly visible.
+ */
+export const secondaryLineOpacity = 0.6;

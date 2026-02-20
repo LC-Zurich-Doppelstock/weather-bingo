@@ -1,28 +1,14 @@
-import { describe, it, expect, vi, beforeAll, afterEach, afterAll } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import RaceSelector from "./RaceSelector";
+import { createWrapper, setupMswLifecycle } from "../../test/helpers";
+import { mockVasaloppetRace, mockTjejvasanRace } from "../../test/fixtures";
 import type { Race } from "../../api/types";
 
-const mockRaces: Race[] = [
-  {
-    id: "race-1",
-    name: "Vasaloppet",
-    year: 2026,
-    start_time: "2026-03-01T07:00:00Z",
-    distance_km: 90,
-  },
-  {
-    id: "race-2",
-    name: "Tjejvasan",
-    year: 2026,
-    start_time: "2026-02-28T08:00:00Z",
-    distance_km: 30,
-  },
-];
+const mockRaces: Race[] = [mockVasaloppetRace, mockTjejvasanRace];
 
 const server = setupServer(
   http.get("/api/v1/races", () => {
@@ -30,20 +16,7 @@ const server = setupServer(
   })
 );
 
-beforeAll(() => server.listen());
-afterEach(() => server.resetHandlers());
-afterAll(() => server.close());
-
-function createWrapper() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return function Wrapper({ children }: { children: React.ReactNode }) {
-    return (
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    );
-  };
-}
+setupMswLifecycle(server);
 
 describe("RaceSelector", () => {
   it("shows loading state initially", () => {

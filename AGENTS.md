@@ -83,6 +83,16 @@ This avoids the bug where new checkpoints at already-cached locations would have
 
 Pacing is computed **server-side only** using elevation-adjusted cost factors. The API returns `expected_time` for each checkpoint in the race forecast response. The frontend reads this directly — there is no client-side pacing code.
 
+### Background Poller
+
+A background `tokio::spawn` task proactively fetches yr.no forecasts for all checkpoints of upcoming races. This ensures every model run is captured even when no users are browsing. Key details:
+
+- **Schedule:** Expires-driven — sleeps until `MIN(expires_at) + 30s`, clamped to [1 min, 30 min].
+- **Retry:** Up to 5 retries with 2-min delay when yr.no returns 304 (no new data yet).
+- **Time bands:** For each checkpoint, forecasts are extracted for hourly slots covering realistic arrival times (10–30 km/h).
+- **State:** In-memory `Arc<RwLock<PollerState>>`, exposed via `/api/v1/poller/status`.
+- **Implementation:** `services/poller.rs` (logic + tests), `routes/poller.rs` (status endpoint).
+
 ### API Endpoints
 
 | Method | Path | Description |
@@ -94,6 +104,7 @@ Pacing is computed **server-side only** using elevation-adjusted cost factors. T
 | GET | `/api/v1/forecasts/checkpoint/:checkpoint_id/history` | Historical forecast evolution |
 | GET | `/api/v1/forecasts/race/:race_id` | Simplified forecasts for all checkpoints |
 | GET | `/api/v1/health` | Health check |
+| GET | `/api/v1/poller/status` | Background poller status |
 
 > Note: There is no `GET /api/v1/races/:id` single-race detail endpoint. Race metadata comes from the list endpoint; course data from the course endpoint.
 
