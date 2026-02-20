@@ -4,7 +4,6 @@ import {
   ComposedChart,
   Line,
   Area,
-  BarChart,
   Bar,
   XAxis,
   YAxis,
@@ -48,6 +47,8 @@ interface ChartDataPoint {
   windRange: [number, number] | null;
   windDirection: string;
   precipitation: number;
+  precipMin: number | null;
+  precipMax: number | null;
 }
 
 /**
@@ -123,6 +124,8 @@ const CourseOverview = memo(function CourseOverview({
               : null,
           windDirection: windDirectionLabel(w.wind_direction_deg),
           precipitation: w.precipitation_mm,
+          precipMin: w.precipitation_min_mm ?? null,
+          precipMax: w.precipitation_max_mm ?? null,
         };
       });
   }, [raceForecast]);
@@ -315,7 +318,7 @@ const CourseOverview = memo(function CourseOverview({
       {/* Precipitation chart */}
       <SparklineSection title="Precipitation" unit="mm">
         <ResponsiveContainer width="100%" height={110}>
-          <BarChart
+          <ComposedChart
             data={data}
             margin={{ top: 5, right: 5, bottom: 5, left: 0 }}
             onMouseMove={handleChartMouseMove}
@@ -337,7 +340,13 @@ const CourseOverview = memo(function CourseOverview({
             />
             <Tooltip
               contentStyle={tooltipStyle}
-              formatter={(value: number) => [formatPrecip(value), ""]}
+              formatter={(value: number, _name: string, props: { payload?: ChartDataPoint }) => {
+                const p = props.payload;
+                if (p?.precipMin != null && p?.precipMax != null) {
+                  return [`${formatPrecip(value)} (${formatPrecip(p.precipMin)}–${formatPrecip(p.precipMax)})`, "Precipitation"];
+                }
+                return [formatPrecip(value), "Precipitation"];
+              }}
               labelFormatter={(v: number) => `${v} km`}
             />
             <ReferenceLine x={hoveredDistance ?? 0} stroke={colors.accentRose} strokeDasharray="3 3" strokeWidth={1} strokeOpacity={hoveredDistance != null ? 1 : 0} ifOverflow="hidden" />
@@ -347,7 +356,7 @@ const CourseOverview = memo(function CourseOverview({
               radius={[2, 2, 0, 0]}
               name="Precipitation"
             />
-          </BarChart>
+          </ComposedChart>
         </ResponsiveContainer>
       </SparklineSection>
 

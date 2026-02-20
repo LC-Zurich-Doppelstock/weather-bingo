@@ -40,9 +40,9 @@ export interface ForecastWeather {
   /** Detail view only — absent in race overview. */
   wind_gust_ms?: number | null;
   precipitation_mm: number;
-  /** Detail view only — absent in race overview. */
+  /** Minimum expected precipitation (present in both race overview and detail). */
   precipitation_min_mm?: number | null;
-  /** Detail view only — absent in race overview. */
+  /** Maximum expected precipitation (present in both race overview and detail). */
   precipitation_max_mm?: number | null;
   precipitation_type: string;
   /** Detail view only — absent in race overview. */

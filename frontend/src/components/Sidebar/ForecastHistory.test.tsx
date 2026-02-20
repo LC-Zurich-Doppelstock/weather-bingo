@@ -25,7 +25,6 @@ vi.mock("recharts", () => ({
   ),
   Line: () => null,
   Area: () => null,
-  Bar: () => null,
   XAxis: () => null,
   YAxis: () => null,
   Tooltip: () => null,
@@ -104,7 +103,6 @@ describe("ForecastHistory", () => {
     );
     // Charts should not be visible
     expect(screen.queryByTestId("ComposedChart")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("BarChart")).not.toBeInTheDocument();
   });
 
   it("expands and loads history charts on click", async () => {

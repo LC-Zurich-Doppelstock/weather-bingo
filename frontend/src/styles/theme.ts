@@ -27,8 +27,8 @@ export const colors = {
 export const chartColors = {
   temperature: "#2DD4A8",
   feelsLike: "#14B8A6",
-  wind: "#7C8CF5",
-  precipitation: "#F5A623",
+  wind: "#F5A623",
+  precipitation: "#7C8CF5",
   humidity: "#34EBB9",
   cloudCover: "#5A7A6E",
   elevation: "#D4687A",

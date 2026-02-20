@@ -64,6 +64,9 @@ interface TimelineDataPoint {
   tempP90: number | null;
   tempRange: [number, number] | null;
   precipitation: number | null;
+  precipMin: number | null;
+  precipMax: number | null;
+  precipRange: [number, number] | null;
   windSpeed: number | null;
   windP10: number | null;
   windP90: number | null;
@@ -113,6 +116,12 @@ export default function MiniTimeline({
             ? [w.temperature_percentile_10_c, w.temperature_percentile_90_c]
             : null,
         precipitation: w?.precipitation_mm ?? null,
+        precipMin: w?.precipitation_min_mm ?? null,
+        precipMax: w?.precipitation_max_mm ?? null,
+        precipRange:
+          w?.precipitation_min_mm != null && w?.precipitation_max_mm != null
+            ? [w.precipitation_min_mm, w.precipitation_max_mm]
+            : null,
         windSpeed: w?.wind_speed_ms ?? null,
         windP10: w?.wind_speed_percentile_10_ms ?? null,
         windP90: w?.wind_speed_percentile_90_ms ?? null,
@@ -130,6 +139,7 @@ export default function MiniTimeline({
 
   const hasTemperatureData = data.some((d) => d.temperature !== null);
   const hasTempBands = data.some((d) => d.tempP10 !== null && d.tempP90 !== null);
+  const hasPrecipBands = data.some((d) => d.precipMin !== null && d.precipMax !== null);
   const hasWindBands = data.some((d) => d.windP10 !== null && d.windP90 !== null);
 
   return (
@@ -237,6 +247,20 @@ export default function MiniTimeline({
                     strokeWidth={1.5}
                     yAxisId="temp"
                   />
+                  {/* Precipitation min-max uncertainty band */}
+                  {hasPrecipBands && (
+                    <Area
+                      yAxisId="precip"
+                      type="monotone"
+                      dataKey="precipRange"
+                      fill={chartColors.precipitation}
+                      fillOpacity={uncertaintyOpacity}
+                      stroke="none"
+                      name="Precip min-max"
+                      connectNulls
+                      activeDot={false}
+                    />
+                  )}
                   {/* Precipitation as area */}
                   <Area
                     yAxisId="precip"

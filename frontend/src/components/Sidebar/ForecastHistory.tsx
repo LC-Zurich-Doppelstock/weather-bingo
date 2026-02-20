@@ -4,7 +4,6 @@ import {
   ComposedChart,
   Line,
   Area,
-  Bar,
   XAxis,
   YAxis,
   Tooltip,
@@ -47,6 +46,7 @@ interface HistoryDataPoint {
   snowTemperature: number;
   tempRange: [number, number] | null;
   precipitation: number;
+  precipRange: [number, number] | null;
   wind: number;
   windRange: [number, number] | null;
 }
@@ -147,6 +147,11 @@ export default function ForecastHistory({
             ? ([w.temperature_percentile_10_c, w.temperature_percentile_90_c] as [number, number])
             : null,
         precipitation: w.precipitation_mm,
+        precipRange:
+          w.precipitation_min_mm != null &&
+          w.precipitation_max_mm != null
+            ? ([w.precipitation_min_mm, w.precipitation_max_mm] as [number, number])
+            : null,
         wind: w.wind_speed_ms,
         windRange:
           w.wind_speed_percentile_10_ms != null &&
@@ -158,6 +163,7 @@ export default function ForecastHistory({
   }, [history]);
 
   const hasTempBands = chartData.some((d) => d.tempRange !== null);
+  const hasPrecipBands = chartData.some((d) => d.precipRange !== null);
   const hasWindBands = chartData.some((d) => d.windRange !== null);
 
   return (
@@ -279,8 +285,8 @@ export default function ForecastHistory({
                       dataKey="temperature"
                       stroke={chartColors.temperature}
                       strokeWidth={2}
-                      dot={{ fill: chartColors.temperature, r: 3 }}
-                      activeDot={{ r: 5 }}
+                      dot={false}
+                      activeDot={{ r: 4 }}
                       name="Temperature"
                     />
                   </ComposedChart>
@@ -313,13 +319,34 @@ export default function ForecastHistory({
                     />
                     <Tooltip
                       contentStyle={tooltipStyle}
-                      formatter={(value: number) => [formatPrecip(value), ""]}
+                      formatter={(value: number | [number, number], name: string) => {
+                        if (name === "Precip min-max") {
+                          const range = value as [number, number];
+                          return [`${formatPrecip(range[0])} to ${formatPrecip(range[1])}`, "Precip min-max"];
+                        }
+                        return [formatPrecip(value as number), name];
+                      }}
                       labelFormatter={formatTooltipFromEpoch}
                     />
-                    <Bar
+                    {hasPrecipBands && (
+                      <Area
+                        type="monotone"
+                        dataKey="precipRange"
+                        fill={chartColors.precipitation}
+                        fillOpacity={uncertaintyOpacity}
+                        stroke="none"
+                        name="Precip min-max"
+                        connectNulls
+                        activeDot={false}
+                      />
+                    )}
+                    <Line
+                      type="monotone"
                       dataKey="precipitation"
-                      fill={chartColors.precipitation}
-                      radius={[2, 2, 0, 0]}
+                      stroke={chartColors.precipitation}
+                      strokeWidth={2}
+                      dot={false}
+                      activeDot={{ r: 4 }}
                       name="Precipitation"
                     />
                   </ComposedChart>
@@ -378,8 +405,8 @@ export default function ForecastHistory({
                       dataKey="wind"
                       stroke={chartColors.wind}
                       strokeWidth={2}
-                      dot={{ fill: chartColors.wind, r: 3 }}
-                      activeDot={{ r: 5 }}
+                      dot={false}
+                      activeDot={{ r: 4 }}
                       name="Wind"
                     />
                   </ComposedChart>
