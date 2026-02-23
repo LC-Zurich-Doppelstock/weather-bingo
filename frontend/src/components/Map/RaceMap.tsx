@@ -16,6 +16,8 @@ interface RaceMapProps {
   selectedCheckpointId: string | null;
   /** Currently hovered checkpoint ID (from chart or map). */
   hoveredCheckpointId: string | null;
+  /** Map of checkpoint_id → expected pass-through time (ISO 8601). */
+  checkpointTimes: Map<string, string>;
   /** Callback when a checkpoint marker is clicked. */
   onCheckpointSelect: (id: string) => void;
   /** Callback when a checkpoint marker is hovered/unhovered. */
@@ -74,6 +76,7 @@ export default function RaceMap({
   checkpoints,
   selectedCheckpointId,
   hoveredCheckpointId,
+  checkpointTimes,
   onCheckpointSelect,
   onCheckpointHover,
 }: RaceMapProps) {
@@ -98,6 +101,7 @@ export default function RaceMap({
           checkpoint={cp}
           isSelected={cp.id === selectedCheckpointId}
           isHovered={cp.id === hoveredCheckpointId}
+          expectedTime={checkpointTimes.get(cp.id)}
           onClick={onCheckpointSelect}
           onHover={onCheckpointHover}
         />

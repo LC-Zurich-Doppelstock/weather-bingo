@@ -24,6 +24,9 @@ function App() {
   const [hoveredCheckpointId, setHoveredCheckpointId] = useState<
     string | null
   >(null);
+  const [checkpointTimes, setCheckpointTimes] = useState<Map<string, string>>(
+    () => new Map()
+  );
 
   const { data: races } = useRaces();
   const { data: course } = useCourse(selectedRaceId);
@@ -98,6 +101,7 @@ function App() {
               checkpoints={checkpoints ?? []}
               selectedCheckpointId={selectedCheckpointId}
               hoveredCheckpointId={hoveredCheckpointId}
+              checkpointTimes={checkpointTimes}
               onCheckpointSelect={setSelectedCheckpointId}
               onCheckpointHover={setHoveredCheckpointId}
             />
@@ -108,6 +112,7 @@ function App() {
             checkpoints={checkpoints ?? []}
             hoveredCheckpointId={hoveredCheckpointId}
             selectedCheckpointId={selectedCheckpointId}
+            checkpointTimes={checkpointTimes}
             onCheckpointHover={setHoveredCheckpointId}
           />
         </div>
@@ -122,6 +127,7 @@ function App() {
             targetDurationHours={debouncedDuration}
             onClearSelection={handleClearSelection}
             onCheckpointHover={setHoveredCheckpointId}
+            onCheckpointTimesChange={setCheckpointTimes}
           />
         </aside>
       </main>

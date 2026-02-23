@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import type { Checkpoint, Race } from "../../api/types";
 import { useForecast, useRaceForecast } from "../../hooks/useForecast";
 import CheckpointDetail from "./CheckpointDetail";
@@ -19,6 +19,8 @@ interface SidebarProps {
   onClearSelection: () => void;
   /** Callback when a checkpoint is hovered/unhovered on the chart. */
   onCheckpointHover: (id: string | null) => void;
+  /** Callback to lift checkpoint→expected_time map to parent. */
+  onCheckpointTimesChange: (times: Map<string, string>) => void;
 }
 
 /** Sticky back-navigation button at the top of the detail view. */
@@ -77,6 +79,7 @@ export default function Sidebar({
   targetDurationHours,
   onClearSelection,
   onCheckpointHover,
+  onCheckpointTimesChange,
 }: SidebarProps) {
   const selectedCheckpoint =
     checkpoints.find((cp) => cp.id === selectedCheckpointId) ?? null;
@@ -91,6 +94,20 @@ export default function Sidebar({
 
   const raceForecast = raceForecastResult?.data ?? null;
   const raceForecastStale = raceForecastResult?.stale ?? false;
+
+  // Build checkpoint_id → expected_time map and lift to parent (for map/elevation tooltips)
+  const checkpointTimesMap = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!raceForecast) return map;
+    for (const cp of raceForecast.checkpoints) {
+      map.set(cp.checkpoint_id, cp.expected_time);
+    }
+    return map;
+  }, [raceForecast]);
+
+  useEffect(() => {
+    onCheckpointTimesChange(checkpointTimesMap);
+  }, [checkpointTimesMap, onCheckpointTimesChange]);
 
   // Look up expected_time from the race forecast response (server-computed pacing)
   const passTime = useMemo(() => {

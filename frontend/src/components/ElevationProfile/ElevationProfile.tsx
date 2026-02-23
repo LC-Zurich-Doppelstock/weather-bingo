@@ -13,6 +13,7 @@ import type { CoursePoint, Checkpoint } from "../../api/types";
 import { chartColors, colors, uncertaintyOpacity } from "../../styles/theme";
 import { tooltipStyle, tickStyle, axisLineStyle } from "../../styles/chartStyles";
 import { computeElevationProfile } from "../../utils/geo";
+import { formatTimeWithZone } from "../../utils/formatting";
 import type { ElevationPoint } from "../../utils/geo";
 
 /** Chevron-down SVG path (rotates when collapsed). */
@@ -39,6 +40,8 @@ interface ElevationProfileProps {
   hoveredCheckpointId: string | null;
   /** Currently selected checkpoint ID. */
   selectedCheckpointId: string | null;
+  /** Map of checkpoint_id → expected pass-through time (ISO 8601). */
+  checkpointTimes?: Map<string, string>;
   /** Callback when a checkpoint is hovered via the elevation chart. */
   onCheckpointHover: (id: string | null) => void;
 }
@@ -55,6 +58,7 @@ const ElevationProfile = memo(function ElevationProfile({
   checkpoints,
   hoveredCheckpointId,
   selectedCheckpointId,
+  checkpointTimes,
   onCheckpointHover,
 }: ElevationProfileProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -93,6 +97,42 @@ const ElevationProfile = memo(function ElevationProfile({
     }
     return map;
   }, [checkpoints]);
+
+  // Map checkpoint distance -> checkpoint id (for looking up expected times)
+  const checkpointIdByDistance = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const cp of checkpoints) {
+      map.set(cp.distance_km, cp.id);
+    }
+    return map;
+  }, [checkpoints]);
+
+  /**
+   * Find the nearest checkpoint to a given distance, if within a threshold.
+   * Returns the checkpoint's expected time string, or null.
+   * Threshold: 5% of total course distance or 2 km, whichever is larger.
+   */
+  const getTimeAtDistance = useCallback(
+    (distanceKm: number): string | null => {
+      if (!checkpointTimes || checkpointTimes.size === 0 || checkpoints.length === 0) return null;
+      const totalDistance = checkpoints[checkpoints.length - 1]!.distance_km || 1;
+      const threshold = Math.max(totalDistance * 0.05, 2);
+      let nearestId: string | null = null;
+      let minDelta = Infinity;
+      for (const [cpDist, cpId] of checkpointIdByDistance) {
+        const delta = Math.abs(distanceKm - cpDist);
+        if (delta < minDelta) {
+          minDelta = delta;
+          nearestId = cpId;
+        }
+      }
+      if (nearestId && minDelta <= threshold) {
+        return checkpointTimes.get(nearestId) ?? null;
+      }
+      return null;
+    },
+    [checkpoints, checkpointTimes, checkpointIdByDistance],
+  );
 
   // When hovering on the chart, find the nearest checkpoint and notify parent
   const handleChartMouseMove = useCallback(
@@ -210,7 +250,11 @@ const ElevationProfile = memo(function ElevationProfile({
                   `${Math.round(value)} m`,
                   "Elevation",
                 ]}
-                labelFormatter={(v: number) => `${v.toFixed(1)} km`}
+                labelFormatter={(v: number) => {
+                  const base = `${v.toFixed(1)} km`;
+                  const time = getTimeAtDistance(v);
+                  return time ? `${base} · ${formatTimeWithZone(time)}` : base;
+                }}
               />
 
               {/* Checkpoint markers: vertical dashed lines with name labels */}

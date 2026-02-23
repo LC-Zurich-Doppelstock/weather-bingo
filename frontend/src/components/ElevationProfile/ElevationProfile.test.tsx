@@ -152,4 +152,35 @@ describe("ElevationProfile", () => {
     // Should still render the profile (just without checkpoint markers)
     expect(screen.getByTestId("area-chart")).toBeInTheDocument();
   });
+
+  it("accepts checkpointTimes prop without errors", () => {
+    const times = new Map<string, string>([
+      ["cp-1", "2026-03-01T07:00:00Z"],
+      ["cp-2", "2026-03-01T09:08:00Z"],
+    ]);
+    render(
+      <ElevationProfile
+        course={mockCourse}
+        checkpoints={mockCheckpoints}
+        hoveredCheckpointId={null}
+        selectedCheckpointId={null}
+        checkpointTimes={times}
+        onCheckpointHover={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("area-chart")).toBeInTheDocument();
+  });
+
+  it("renders without checkpointTimes prop (optional)", () => {
+    render(
+      <ElevationProfile
+        course={mockCourse}
+        checkpoints={mockCheckpoints}
+        hoveredCheckpointId={null}
+        selectedCheckpointId={null}
+        onCheckpointHover={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("area-chart")).toBeInTheDocument();
+  });
 });
