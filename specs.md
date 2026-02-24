@@ -165,7 +165,7 @@ Table: yr_responses
 | Method | Path                             | Description                                      |
 | ------ | -------------------------------- | ------------------------------------------------ |
 | GET    | `/api/v1/races`                  | List all available races                         |
-| GET    | `/api/v1/races/:id/course`       | Get parsed course GPS points (lat/lon/ele array) |
+| GET    | `/api/v1/races/:id/course`       | Get parsed course GPS points (lat/lon/ele/distance_km/time_fraction) |
 | GET    | `/api/v1/races/:id/checkpoints`  | Get all checkpoints for a race                   |
 
 #### Forecasts
@@ -580,7 +580,7 @@ A collapsible elevation profile chart positioned below the map on desktop:
 └──────────────────────────────────┘
 ```
 
-- **X-axis:** cumulative distance (km) computed client-side from the full GPS track via Haversine.
+- **X-axis:** cumulative distance (km) provided by the server on each `CoursePoint.distance_km`.
 - **Y-axis:** elevation (m) from the GPS track `ele` field.
 - **Fill:** Accent Rose (`#D4687A`) area fill at 15% opacity.
 - **Checkpoint markers:** Vertical dashed lines at each checkpoint's `distance_km`, with short name labels above.
@@ -589,7 +589,7 @@ A collapsible elevation profile chart positioned below the map on desktop:
 - **Collapsible:** Header bar with chevron toggle; `max-h-0 overflow-hidden` / visible state with CSS transition.
 - **Desktop only:** Hidden on mobile via `hidden lg:block`. Only rendered at `lg` (1024px+) breakpoint.
 - **Downsampled:** GPS tracks are downsampled to ~500 points max for chart performance.
-- **Geo utilities:** `utils/geo.ts` provides `haversineDistance()` and `computeElevationProfile()` for distance computation.
+- **Geo utilities:** `utils/geo.ts` provides `computeElevationProfile()` which maps server-provided `distance_km` and `ele` fields for charting.
 
 ### 5.6 Colour Scheme
 
@@ -935,13 +935,13 @@ Returns the parsed course GPS track as an array of coordinate points (extracted 
 **Response:**
 ```json
 [
-  { "lat": 61.157, "lon": 14.352, "ele": 380.0 },
-  { "lat": 61.155, "lon": 14.348, "ele": 385.0 },
-  { "lat": 61.152, "lon": 14.340, "ele": 390.0 }
+  { "lat": 61.157, "lon": 14.352, "ele": 380.0, "distance_km": 0.0, "time_fraction": 0.0 },
+  { "lat": 61.155, "lon": 14.348, "ele": 385.0, "distance_km": 0.25, "time_fraction": 0.003 },
+  { "lat": 61.152, "lon": 14.340, "ele": 390.0, "distance_km": 0.72, "time_fraction": 0.008 }
 ]
 ```
 
-> **Note:** Returns 404 if the race is not found. Each element has `lat` (WGS84 latitude), `lon` (WGS84 longitude), and `ele` (elevation in metres above sea level).
+> **Note:** Returns 404 if the race is not found. Each element has `lat` (WGS84 latitude), `lon` (WGS84 longitude), `ele` (elevation in metres above sea level), `distance_km` (cumulative Haversine distance from start), and `time_fraction` (0.0–1.0 elevation-adjusted pacing fraction, duration-independent).
 
 ### 9.3 GET `/api/v1/races/:id/checkpoints`
 

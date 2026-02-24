@@ -3,6 +3,7 @@ import { CircleMarker, Tooltip } from "react-leaflet";
 import type L from "leaflet";
 import type { Checkpoint } from "../../api/types";
 import { colors } from "../../styles/theme";
+import { formatTimeWithZone } from "../../utils/formatting";
 
 interface CheckpointMarkerProps {
   /** Checkpoint data. */
@@ -11,6 +12,8 @@ interface CheckpointMarkerProps {
   isSelected: boolean;
   /** Whether this checkpoint is currently hovered (from chart or map). */
   isHovered: boolean;
+  /** Expected pass-through time (ISO 8601), if available. */
+  expectedTime?: string;
   /** Callback when the marker is clicked. */
   onClick: (id: string) => void;
   /** Callback when the marker is hovered/unhovered. */
@@ -26,6 +29,7 @@ const CheckpointMarker = memo(function CheckpointMarker({
   checkpoint,
   isSelected,
   isHovered,
+  expectedTime,
   onClick,
   onHover,
 }: CheckpointMarkerProps) {
@@ -105,6 +109,7 @@ const CheckpointMarker = memo(function CheckpointMarker({
           <div>{checkpoint.name}</div>
           <div className="text-text-secondary">
             {checkpoint.distance_km.toFixed(1)} km
+            {expectedTime && ` · ${formatTimeWithZone(expectedTime)}`}
           </div>
         </div>
       </Tooltip>

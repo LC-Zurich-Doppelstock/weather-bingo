@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
@@ -34,6 +34,7 @@ describe("Sidebar", () => {
         targetDurationHours={8}
         onClearSelection={vi.fn()}
         onCheckpointHover={vi.fn()}
+        onCheckpointTimesChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -52,6 +53,7 @@ describe("Sidebar", () => {
         targetDurationHours={8}
         onClearSelection={vi.fn()}
         onCheckpointHover={vi.fn()}
+        onCheckpointTimesChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -70,6 +72,7 @@ describe("Sidebar", () => {
         targetDurationHours={8}
         onClearSelection={vi.fn()}
         onCheckpointHover={vi.fn()}
+        onCheckpointTimesChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -92,6 +95,7 @@ describe("Sidebar", () => {
         targetDurationHours={8}
         onClearSelection={onClearSelection}
         onCheckpointHover={vi.fn()}
+        onCheckpointTimesChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -111,6 +115,7 @@ describe("Sidebar", () => {
         targetDurationHours={8}
         onClearSelection={vi.fn()}
         onCheckpointHover={vi.fn()}
+        onCheckpointTimesChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -138,6 +143,7 @@ describe("Sidebar", () => {
         targetDurationHours={8}
         onClearSelection={vi.fn()}
         onCheckpointHover={vi.fn()}
+        onCheckpointTimesChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -167,6 +173,7 @@ describe("Sidebar", () => {
         targetDurationHours={8}
         onClearSelection={vi.fn()}
         onCheckpointHover={vi.fn()}
+        onCheckpointTimesChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -198,6 +205,7 @@ describe("Sidebar", () => {
         targetDurationHours={8}
         onClearSelection={vi.fn()}
         onCheckpointHover={vi.fn()}
+        onCheckpointTimesChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -206,5 +214,36 @@ describe("Sidebar", () => {
       await screen.findByText("Failed to load forecast data.")
     ).toBeInTheDocument();
     expect(screen.getByText("Retry")).toBeInTheDocument();
+  });
+
+  it("calls onCheckpointTimesChange with checkpoint times when race forecast loads", async () => {
+    const onCheckpointTimesChange = vi.fn();
+
+    render(
+      <Sidebar
+        race={mockVasaloppetRace}
+        checkpoints={mockCheckpoints}
+        selectedCheckpointId={null}
+        hoveredCheckpointId={null}
+        targetDurationHours={8}
+        onClearSelection={vi.fn()}
+        onCheckpointHover={vi.fn()}
+        onCheckpointTimesChange={onCheckpointTimesChange}
+      />,
+      { wrapper: createWrapper() }
+    );
+
+    // Wait for the race forecast to load and the effect to propagate
+    await screen.findByText("Weather Along the Course");
+
+    await waitFor(() => {
+      const populatedCall = onCheckpointTimesChange.mock.calls.find(
+        (args: unknown[]) => (args[0] as Map<string, string>).size > 0,
+      );
+      expect(populatedCall).toBeDefined();
+      const timesMap = populatedCall![0] as Map<string, string>;
+      expect(timesMap.get("cp-1")).toBe("2026-03-01T07:00:00Z");
+      expect(timesMap.get("cp-2")).toBe("2026-03-01T09:08:00Z");
+    });
   });
 });

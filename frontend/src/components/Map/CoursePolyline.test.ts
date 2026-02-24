@@ -24,9 +24,9 @@ function shouldRender(points: CoursePoint[]): boolean {
 describe("CoursePolyline coordinate mapping", () => {
   it("maps course points to [lat, lon] pairs", () => {
     const points: CoursePoint[] = [
-      { lat: 61.1, lon: 14.2, ele: 500 },
-      { lat: 61.2, lon: 14.3, ele: 520 },
-      { lat: 61.3, lon: 14.4, ele: 540 },
+      { lat: 61.1, lon: 14.2, ele: 500, distance_km: 0, time_fraction: 0 },
+      { lat: 61.2, lon: 14.3, ele: 520, distance_km: 12.5, time_fraction: 0.5 },
+      { lat: 61.3, lon: 14.4, ele: 540, distance_km: 25.0, time_fraction: 1 },
     ];
 
     const positions = mapToPositions(points);
@@ -42,7 +42,7 @@ describe("CoursePolyline coordinate mapping", () => {
   });
 
   it("handles single point", () => {
-    const points: CoursePoint[] = [{ lat: 61.0, lon: 14.0, ele: 300 }];
+    const points: CoursePoint[] = [{ lat: 61.0, lon: 14.0, ele: 300, distance_km: 0, time_fraction: 0 }];
     const positions = mapToPositions(points);
     expect(positions).toHaveLength(1);
     expect(positions[0]).toEqual([61.0, 14.0]);
@@ -50,8 +50,8 @@ describe("CoursePolyline coordinate mapping", () => {
 
   it("preserves coordinate precision", () => {
     const points: CoursePoint[] = [
-      { lat: 61.156789, lon: 13.263912, ele: 545.3 },
-      { lat: 60.999001, lon: 14.537821, ele: 165.7 },
+      { lat: 61.156789, lon: 13.263912, ele: 545.3, distance_km: 0, time_fraction: 0 },
+      { lat: 60.999001, lon: 14.537821, ele: 165.7, distance_km: 65.2, time_fraction: 1 },
     ];
 
     const positions = mapToPositions(points);
@@ -63,7 +63,7 @@ describe("CoursePolyline coordinate mapping", () => {
 
   it("discards elevation (used only for display, not map positioning)", () => {
     const points: CoursePoint[] = [
-      { lat: 61.1, lon: 14.2, ele: 999 },
+      { lat: 61.1, lon: 14.2, ele: 999, distance_km: 0, time_fraction: 0 },
     ];
 
     const positions = mapToPositions(points);
@@ -78,13 +78,13 @@ describe("CoursePolyline render guard", () => {
   });
 
   it("should not render with a single point (cannot form a line)", () => {
-    expect(shouldRender([{ lat: 61.0, lon: 14.0, ele: 300 }])).toBe(false);
+    expect(shouldRender([{ lat: 61.0, lon: 14.0, ele: 300, distance_km: 0, time_fraction: 0 }])).toBe(false);
   });
 
   it("should render with two or more points", () => {
     const points: CoursePoint[] = [
-      { lat: 61.1, lon: 14.2, ele: 500 },
-      { lat: 61.2, lon: 14.3, ele: 520 },
+      { lat: 61.1, lon: 14.2, ele: 500, distance_km: 0, time_fraction: 0 },
+      { lat: 61.2, lon: 14.3, ele: 520, distance_km: 12.5, time_fraction: 1 },
     ];
     expect(shouldRender(points)).toBe(true);
   });
@@ -94,6 +94,8 @@ describe("CoursePolyline render guard", () => {
       lat: 61.0 + i * 0.001,
       lon: 14.0 + i * 0.001,
       ele: 300 + i * 0.1,
+      distance_km: i * 0.111,
+      time_fraction: i / 4999,
     }));
     expect(shouldRender(points)).toBe(true);
     expect(mapToPositions(points)).toHaveLength(5000);

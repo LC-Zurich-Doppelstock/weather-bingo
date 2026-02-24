@@ -359,6 +359,64 @@ fn build_gpx_race(
     })
 }
 
+/// Earth's mean radius in kilometres (WGS84 volumetric mean).
+const EARTH_RADIUS_KM: f64 = 6371.0;
+
+/// Compute Haversine distance between two lat/lon points in kilometres.
+pub fn haversine_distance_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let to_rad = |deg: f64| deg * std::f64::consts::PI / 180.0;
+
+    let d_lat = to_rad(lat2 - lat1);
+    let d_lon = to_rad(lon2 - lon1);
+    let a = (d_lat / 2.0).sin().powi(2)
+        + to_rad(lat1).cos() * to_rad(lat2).cos() * (d_lon / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+
+    EARTH_RADIUS_KM * c
+}
+
+/// A point along the race course with cumulative distance and elevation.
+///
+/// Produced by [`compute_track_profile`] from raw [`CoursePoint`] data.
+/// Used by the track-aware pacing model to compute micro-elevation costs.
+#[derive(Debug, Clone)]
+pub struct TrackPoint {
+    /// Cumulative distance from start in kilometres
+    pub distance_km: f64,
+    /// Elevation in metres above sea level
+    pub elevation_m: f64,
+}
+
+/// Compute a track profile with cumulative distances from raw GPS coordinates.
+///
+/// Takes a slice of [`CoursePoint`] (lat/lon/ele) and returns a Vec of
+/// [`TrackPoint`] with cumulative Haversine distances. The first point
+/// always has `distance_km = 0.0`.
+pub fn compute_track_profile(points: &[CoursePoint]) -> Vec<TrackPoint> {
+    if points.is_empty() {
+        return vec![];
+    }
+
+    let mut result = Vec::with_capacity(points.len());
+    result.push(TrackPoint {
+        distance_km: 0.0,
+        elevation_m: points[0].ele,
+    });
+
+    let mut cumulative = 0.0;
+    for i in 1..points.len() {
+        let prev = &points[i - 1];
+        let curr = &points[i];
+        cumulative += haversine_distance_km(prev.lat, prev.lon, curr.lat, curr.lon);
+        result.push(TrackPoint {
+            distance_km: cumulative,
+            elevation_m: curr.ele,
+        });
+    }
+
+    result
+}
+
 /// A single coordinate point along the race course.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct CoursePoint {
@@ -368,6 +426,11 @@ pub struct CoursePoint {
     pub lon: f64,
     /// Elevation in metres above sea level
     pub ele: f64,
+    /// Cumulative distance from start in kilometres (always populated)
+    pub distance_km: f64,
+    /// Cumulative time fraction (0.0 at start, 1.0 at finish).
+    /// Based on elevation-adjusted pacing model (duration-independent).
+    pub time_fraction: f64,
 }
 
 /// Extract track points from GPX XML as `[{lat, lon, ele}]` coordinates.
@@ -447,6 +510,8 @@ pub fn extract_track_points(gpx_xml: &str) -> Result<Vec<CoursePoint>, GpxError>
                             lat: trkpt_lat,
                             lon: trkpt_lon,
                             ele: trkpt_ele.unwrap_or(0.0),
+                            distance_km: 0.0,   // filled in below
+                            time_fraction: 0.0, // overwritten by course handler with elevation-based pacing
                         });
                         in_trkpt = false;
                     }
@@ -458,6 +523,16 @@ pub fn extract_track_points(gpx_xml: &str) -> Result<Vec<CoursePoint>, GpxError>
             _ => {}
         }
         buf.clear();
+    }
+
+    // Compute cumulative Haversine distances
+    if points.len() > 1 {
+        let mut cumulative = 0.0;
+        for i in 1..points.len() {
+            let prev = &points[i - 1];
+            cumulative += haversine_distance_km(prev.lat, prev.lon, points[i].lat, points[i].lon);
+            points[i].distance_km = cumulative;
+        }
     }
 
     Ok(points)
@@ -734,5 +809,128 @@ mod tests {
         let points = extract_track_points(gpx).unwrap();
         assert_eq!(points.len(), 1);
         assert_eq!(points[0].ele, 0.0); // defaults to 0
+    }
+
+    // --- Haversine distance tests ---
+
+    #[test]
+    fn test_haversine_same_point_is_zero() {
+        let d = haversine_distance_km(61.0, 14.0, 61.0, 14.0);
+        assert!(d.abs() < 1e-10, "Same point should be 0 km, got {}", d);
+    }
+
+    #[test]
+    fn test_haversine_known_distance() {
+        // Berga (Sälen) to Mora — roughly 90 km straight line
+        // Berga: 61.157, 13.269  Mora: 61.005, 14.542
+        let d = haversine_distance_km(61.157, 13.269, 61.005, 14.542);
+        // Straight-line is ~65 km (the 90 km race follows a winding trail)
+        assert!(d > 50.0 && d < 80.0, "Expected ~65 km, got {:.1}", d);
+    }
+
+    #[test]
+    fn test_haversine_symmetry() {
+        let d1 = haversine_distance_km(61.0, 13.0, 62.0, 14.0);
+        let d2 = haversine_distance_km(62.0, 14.0, 61.0, 13.0);
+        assert!(
+            (d1 - d2).abs() < 1e-10,
+            "Haversine should be symmetric: {} vs {}",
+            d1,
+            d2
+        );
+    }
+
+    // --- compute_track_profile tests ---
+
+    #[test]
+    fn test_track_profile_empty() {
+        let profile = compute_track_profile(&[]);
+        assert!(profile.is_empty());
+    }
+
+    #[test]
+    fn test_track_profile_single_point() {
+        let points = vec![CoursePoint {
+            lat: 61.0,
+            lon: 14.0,
+            ele: 350.0,
+            distance_km: 0.0,
+            time_fraction: 0.0,
+        }];
+        let profile = compute_track_profile(&points);
+        assert_eq!(profile.len(), 1);
+        assert!((profile[0].distance_km - 0.0).abs() < 1e-10);
+        assert!((profile[0].elevation_m - 350.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_track_profile_cumulative_distances() {
+        let points = vec![
+            CoursePoint {
+                lat: 61.0,
+                lon: 14.0,
+                ele: 100.0,
+                distance_km: 0.0,
+                time_fraction: 0.0,
+            },
+            CoursePoint {
+                lat: 61.01,
+                lon: 14.0,
+                ele: 150.0,
+                distance_km: 0.0,
+                time_fraction: 0.0,
+            },
+            CoursePoint {
+                lat: 61.02,
+                lon: 14.0,
+                ele: 200.0,
+                distance_km: 0.0,
+                time_fraction: 0.0,
+            },
+        ];
+        let profile = compute_track_profile(&points);
+        assert_eq!(profile.len(), 3);
+        assert!((profile[0].distance_km - 0.0).abs() < 1e-10);
+        // Each step is ~1.11 km (0.01 degrees latitude)
+        assert!(profile[1].distance_km > 0.5 && profile[1].distance_km < 2.0);
+        // Cumulative: second step should be roughly double the first
+        assert!(profile[2].distance_km > profile[1].distance_km);
+        let ratio = profile[2].distance_km / profile[1].distance_km;
+        assert!(
+            (ratio - 2.0).abs() < 0.1,
+            "Equal steps should double: ratio={}",
+            ratio
+        );
+        // Elevations preserved
+        assert!((profile[0].elevation_m - 100.0).abs() < 1e-10);
+        assert!((profile[1].elevation_m - 150.0).abs() < 1e-10);
+        assert!((profile[2].elevation_m - 200.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_track_profile_vasaloppet() {
+        let gpx = include_str!("../../../data/vasaloppet-2026.gpx");
+        let course_points = extract_track_points(gpx).unwrap();
+        let profile = compute_track_profile(&course_points);
+
+        assert_eq!(profile.len(), course_points.len());
+        assert!((profile[0].distance_km - 0.0).abs() < 1e-10);
+
+        // Total distance should be roughly 90 km (Vasaloppet)
+        let total = profile.last().unwrap().distance_km;
+        assert!(
+            total > 80.0 && total < 100.0,
+            "Vasaloppet track should be ~90 km, got {:.1}",
+            total
+        );
+
+        // Monotonically increasing distances
+        for i in 1..profile.len() {
+            assert!(
+                profile[i].distance_km >= profile[i - 1].distance_km,
+                "Distances should be monotonic at index {}",
+                i
+            );
+        }
     }
 }

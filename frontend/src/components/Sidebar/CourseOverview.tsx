@@ -35,6 +35,7 @@ interface ChartDataPoint {
   checkpointId: string;
   name: string;
   distance: number;
+  expectedTime: string;
   temperature: number;
   tempP10: number | null;
   tempP90: number | null;
@@ -104,6 +105,7 @@ const CourseOverview = memo(function CourseOverview({
           checkpointId: cp.checkpoint_id,
           name: cp.name.split(" ")[0] ?? cp.name,
           distance: cp.distance_km,
+          expectedTime: cp.expected_time,
           temperature: w.temperature_c,
           tempP10: w.temperature_percentile_10_c ?? null,
           tempP90: w.temperature_percentile_90_c ?? null,
@@ -267,7 +269,11 @@ const CourseOverview = memo(function CourseOverview({
                 }
                 return [formatTemp(value as number), name];
               }}
-              labelFormatter={(v: number) => `${v} km`}
+              labelFormatter={(_v: number, payload: { payload?: ChartDataPoint }[]) => {
+                const p = payload?.[0]?.payload;
+                if (!p) return `${_v} km`;
+                return `${p.distance} km · ${formatTimeWithZone(p.expectedTime)}`;
+              }}
             />
             <ReferenceLine y={0} stroke={colors.border} strokeDasharray="3 3" />
             <ReferenceLine x={hoveredDistance ?? 0} stroke={colors.accentRose} strokeDasharray="3 3" strokeWidth={1} strokeOpacity={hoveredDistance != null ? 1 : 0} ifOverflow="hidden" />
@@ -347,7 +353,11 @@ const CourseOverview = memo(function CourseOverview({
                 }
                 return [formatPrecip(value), "Precipitation"];
               }}
-              labelFormatter={(v: number) => `${v} km`}
+              labelFormatter={(_v: number, payload: { payload?: ChartDataPoint }[]) => {
+                const p = payload?.[0]?.payload;
+                if (!p) return `${_v} km`;
+                return `${p.distance} km · ${formatTimeWithZone(p.expectedTime)}`;
+              }}
             />
             <ReferenceLine x={hoveredDistance ?? 0} stroke={colors.accentRose} strokeDasharray="3 3" strokeWidth={1} strokeOpacity={hoveredDistance != null ? 1 : 0} ifOverflow="hidden" />
             <Bar
@@ -393,7 +403,11 @@ const CourseOverview = memo(function CourseOverview({
                 const dir = props.payload?.windDirection ?? "";
                 return [`${formatWind(value as number)} ${dir}`, "Wind"];
               }}
-              labelFormatter={(v: number) => `${v} km`}
+              labelFormatter={(_v: number, payload: { payload?: ChartDataPoint }[]) => {
+                const p = payload?.[0]?.payload;
+                if (!p) return `${_v} km`;
+                return `${p.distance} km · ${formatTimeWithZone(p.expectedTime)}`;
+              }}
             />
             <ReferenceLine x={hoveredDistance ?? 0} stroke={colors.accentRose} strokeDasharray="3 3" strokeWidth={1} strokeOpacity={hoveredDistance != null ? 1 : 0} ifOverflow="hidden" />
             {hasWindBands && (

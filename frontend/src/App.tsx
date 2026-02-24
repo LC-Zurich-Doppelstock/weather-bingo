@@ -24,9 +24,11 @@ function App() {
   const [hoveredCheckpointId, setHoveredCheckpointId] = useState<
     string | null
   >(null);
+  const [checkpointTimes, setCheckpointTimes] = useState<Map<string, string>>(
+    () => new Map()
+  );
 
   const { data: races } = useRaces();
-  const { data: course } = useCourse(selectedRaceId);
   const { data: checkpoints } = useCheckpoints(selectedRaceId);
 
   // Derive selected race from the races list (no separate detail endpoint)
@@ -68,6 +70,20 @@ function App() {
   // for 300ms of inactivity.
   const debouncedDuration = useDebouncedValue(clampedDuration, 300);
 
+  // Fetch course with pacing time fractions (always present, duration-independent)
+  const { data: course } = useCourse(selectedRaceId);
+
+  // Compute pacing time profile from course points (fraction → ISO time)
+  const pacingProfile = useMemo(() => {
+    if (!course || course.length === 0 || !race?.start_time) return null;
+    const startMs = new Date(race.start_time).getTime();
+    const durationMs = debouncedDuration * 3600 * 1000;
+    return course.map((p) => ({
+      distance_km: p.distance_km,
+      time: new Date(startMs + p.time_fraction * durationMs).toISOString(),
+    }));
+  }, [course, race?.start_time, debouncedDuration]);
+
   const handleClearSelection = useCallback(() => {
     setSelectedCheckpointId(null);
   }, []);
@@ -98,6 +114,7 @@ function App() {
               checkpoints={checkpoints ?? []}
               selectedCheckpointId={selectedCheckpointId}
               hoveredCheckpointId={hoveredCheckpointId}
+              checkpointTimes={checkpointTimes}
               onCheckpointSelect={setSelectedCheckpointId}
               onCheckpointHover={setHoveredCheckpointId}
             />
@@ -108,6 +125,8 @@ function App() {
             checkpoints={checkpoints ?? []}
             hoveredCheckpointId={hoveredCheckpointId}
             selectedCheckpointId={selectedCheckpointId}
+            checkpointTimes={checkpointTimes}
+            pacingProfile={pacingProfile}
             onCheckpointHover={setHoveredCheckpointId}
           />
         </div>
@@ -122,6 +141,7 @@ function App() {
             targetDurationHours={debouncedDuration}
             onClearSelection={handleClearSelection}
             onCheckpointHover={setHoveredCheckpointId}
+            onCheckpointTimesChange={setCheckpointTimes}
           />
         </aside>
       </main>

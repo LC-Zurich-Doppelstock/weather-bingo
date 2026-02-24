@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchRaces, fetchCourse, fetchCheckpoints } from "../api/client";
+import type { CoursePoint } from "../api/types";
 
 /** Fetch all available races. Races rarely change — cache for 5 minutes. */
 export function useRaces() {
@@ -10,9 +11,17 @@ export function useRaces() {
   });
 }
 
-/** Fetch course coordinates for a race. Course GPS data is static — cache for 10 minutes. */
+/**
+ * Fetch course coordinates for a race, with cumulative distances
+ * and pacing time fractions.
+ *
+ * Each CoursePoint always includes a `time_fraction` field (0.0 at start,
+ * 1.0 at finish) based on elevation-adjusted pacing. The fractions are
+ * duration-independent — they represent relative effort, not clock time.
+ * Course GPS data is static — cache for 10 minutes.
+ */
 export function useCourse(raceId: string | null) {
-  return useQuery({
+  return useQuery<CoursePoint[]>({
     queryKey: ["course", raceId],
     queryFn: () => fetchCourse(raceId!),
     enabled: !!raceId,

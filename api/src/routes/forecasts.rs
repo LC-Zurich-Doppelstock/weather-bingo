@@ -19,9 +19,11 @@ use crate::helpers::{dec_to_f64, opt_dec_to_f64};
 /// Maximum allowed value for `target_duration_hours` query parameter (3 days).
 const MAX_TARGET_DURATION_HOURS: f64 = 72.0;
 use crate::services::forecast::{
-    calculate_pass_time_fractions, calculate_pass_time_weighted, get_checkpoint, resolve_forecast,
-    resolve_race_forecasts, CheckpointWithTime, PacingCheckpoint,
+    calculate_pass_time_fractions, calculate_pass_time_weighted, compute_pacing_profile,
+    get_checkpoint, interpolate_fraction_from_profile, resolve_forecast, resolve_race_forecasts,
+    CheckpointWithTime, PacingCheckpoint,
 };
+use crate::services::gpx::{compute_track_profile, extract_track_points};
 use crate::services::yr::YrClient;
 
 /// Shared application state for forecast endpoints.
@@ -458,7 +460,42 @@ pub async fn get_race_forecast(
             elevation_m: dec_to_f64(cp.elevation_m),
         })
         .collect();
-    let time_fractions = calculate_pass_time_fractions(&pacing_inputs);
+
+    // Load GPX track for track-aware pacing (uses full elevation profile
+    // instead of net elevation between checkpoints)
+    let time_fractions = match queries::get_race_course_gpx(&state.pool, race_id).await? {
+        Some(gpx_xml) => match extract_track_points(&gpx_xml) {
+            Ok(course_points) => {
+                let track = compute_track_profile(&course_points);
+                tracing::debug!(
+                    "Track-aware pacing: {} track points for race {}",
+                    track.len(),
+                    race_id
+                );
+
+                // Compute per-track-point pacing profile then derive checkpoint fractions
+                let profile_raw = compute_pacing_profile(&track, 500);
+
+                // Derive checkpoint fractions from the profile (single source of truth)
+                pacing_inputs
+                    .iter()
+                    .map(|cp| interpolate_fraction_from_profile(&profile_raw, cp.distance_km))
+                    .collect()
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to parse GPX track for race {}, falling back to simple pacing: {}",
+                    race_id,
+                    e
+                );
+                calculate_pass_time_fractions(&pacing_inputs)
+            }
+        },
+        None => {
+            tracing::debug!("No GPX track for race {}, using simple pacing", race_id);
+            calculate_pass_time_fractions(&pacing_inputs)
+        }
+    };
 
     // Build checkpoint + expected time pairs using elevation-adjusted pacing
     let checkpoints_with_times: Vec<CheckpointWithTime> = checkpoints

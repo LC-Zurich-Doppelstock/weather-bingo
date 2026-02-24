@@ -13,6 +13,11 @@ export interface CoursePoint {
   lat: number;
   lon: number;
   ele: number;
+  /** Cumulative distance from start in kilometres (always populated). */
+  distance_km: number;
+  /** Cumulative time fraction (0.0 at start, 1.0 at finish).
+   *  Based on elevation-adjusted pacing model (duration-independent). */
+  time_fraction: number;
 }
 
 export interface Checkpoint {

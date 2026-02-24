@@ -74,7 +74,7 @@ export function fetchRaces(): Promise<Race[]> {
   return fetchJson<Race[]>(`${BASE_URL}/races`);
 }
 
-/** Get course coordinates for a race. */
+/** Get course coordinates for a race, with cumulative distances and time fractions. */
 export function fetchCourse(raceId: string): Promise<CoursePoint[]> {
   return fetchJson<CoursePoint[]>(`${BASE_URL}/races/${raceId}/course`);
 }
