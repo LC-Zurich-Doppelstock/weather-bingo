@@ -98,7 +98,7 @@ A background `tokio::spawn` task proactively fetches yr.no forecasts for all che
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/races` | List all races |
-| GET | `/api/v1/races/:id/course` | Parsed course GPS points (lat/lon/ele array) |
+| GET | `/api/v1/races/:id/course` | Parsed course GPS points (lat/lon/ele/distance_km/time_fraction) |
 | GET | `/api/v1/races/:id/checkpoints` | All checkpoints for a race |
 | GET | `/api/v1/forecasts/checkpoint/:checkpoint_id` | Full forecast for a checkpoint |
 | GET | `/api/v1/forecasts/checkpoint/:checkpoint_id/history` | Historical forecast evolution |
@@ -157,4 +157,4 @@ Uncertainty ranges (percentile bands) are rendered at **15% opacity** of the sam
 
 - **Collapsible sections:** The `ElevationProfile` component implements a collapsible pattern using a header button with chevron icon, toggling `max-h-0 overflow-hidden` / `max-h-[200px]` with `transition-all duration-200`. Reuse this pattern for any future collapsible sections.
 - **Elevation Profile:** `components/ElevationProfile/ElevationProfile.tsx` — Recharts AreaChart below the map, desktop-only (`hidden lg:block`), collapsible, bidirectional hover sync via `hoveredCheckpointId` pattern.
-- **Geo utilities:** `utils/geo.ts` provides `haversineDistance()` and `computeElevationProfile()` for computing cumulative distance along a GPS track.
+- **Geo utilities:** `utils/geo.ts` provides `computeElevationProfile()` which maps server-provided `distance_km` and `ele` fields for charting.

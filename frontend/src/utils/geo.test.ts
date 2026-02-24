@@ -1,46 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { haversineDistance, computeElevationProfile } from "./geo";
+import { computeElevationProfile } from "./geo";
 import type { CoursePoint } from "../api/types";
-
-describe("haversineDistance", () => {
-  it("returns 0 for identical points", () => {
-    expect(haversineDistance(60, 15, 60, 15)).toBe(0);
-  });
-
-  it("computes ~111 km for 1 degree of latitude at the equator", () => {
-    const d = haversineDistance(0, 0, 1, 0);
-    // 1 degree latitude ≈ 111.19 km
-    expect(d).toBeGreaterThan(110);
-    expect(d).toBeLessThan(112);
-  });
-
-  it("computes ~111 km for 1 degree of longitude at the equator", () => {
-    const d = haversineDistance(0, 0, 0, 1);
-    expect(d).toBeGreaterThan(110);
-    expect(d).toBeLessThan(112);
-  });
-
-  it("computes shorter distance for 1 degree longitude at 60°N", () => {
-    // At 60°N, 1 degree longitude ≈ 55.6 km
-    const d = haversineDistance(60, 0, 60, 1);
-    expect(d).toBeGreaterThan(54);
-    expect(d).toBeLessThan(57);
-  });
-
-  it("handles negative coordinates", () => {
-    const d = haversineDistance(-33.8688, 151.2093, -37.8136, 144.9631);
-    // Sydney to Melbourne ≈ 714 km
-    expect(d).toBeGreaterThan(700);
-    expect(d).toBeLessThan(730);
-  });
-
-  it("handles antipodal points", () => {
-    const d = haversineDistance(0, 0, 0, 180);
-    // Half circumference ≈ 20015 km
-    expect(d).toBeGreaterThan(20000);
-    expect(d).toBeLessThan(20100);
-  });
-});
 
 describe("computeElevationProfile", () => {
   it("returns empty array for empty input", () => {

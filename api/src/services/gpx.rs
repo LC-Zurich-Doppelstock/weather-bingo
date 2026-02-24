@@ -511,7 +511,7 @@ pub fn extract_track_points(gpx_xml: &str) -> Result<Vec<CoursePoint>, GpxError>
                             lon: trkpt_lon,
                             ele: trkpt_ele.unwrap_or(0.0),
                             distance_km: 0.0,   // filled in below
-                            time_fraction: 0.0, // filled in by races.rs handler
+                            time_fraction: 0.0, // overwritten by course handler with elevation-based pacing
                         });
                         in_trkpt = false;
                     }
