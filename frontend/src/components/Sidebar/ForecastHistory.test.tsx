@@ -117,9 +117,9 @@ describe("ForecastHistory", () => {
 
     expect(button).toHaveAttribute("aria-expanded", "true");
 
-    // Wait for charts to appear (temp + precip + wind = 3 ComposedCharts)
+    // Wait for charts to appear (temp + precip + wind + humidity/cloud = 4 ComposedCharts)
     await waitFor(() => {
-      expect(screen.getAllByTestId("ComposedChart")).toHaveLength(3);
+      expect(screen.getAllByTestId("ComposedChart")).toHaveLength(4);
     });
   });
 
@@ -222,6 +222,9 @@ describe("ForecastHistory", () => {
     expect(
       screen.getByRole("img", { name: "Wind Speed history chart" })
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("img", { name: "Humidity & Cloud Cover history chart" })
+    ).toBeInTheDocument();
   });
 
   it("collapses when clicked again", async () => {
@@ -253,10 +256,11 @@ describe("ForecastHistory", () => {
 
     await waitFor(() => {
       const composedCharts = screen.getAllByTestId("ComposedChart");
-      expect(composedCharts).toHaveLength(3);
+      expect(composedCharts).toHaveLength(4);
       expect(composedCharts[0]).toHaveAttribute("data-points", "5");
       expect(composedCharts[1]).toHaveAttribute("data-points", "5"); // precipitation
       expect(composedCharts[2]).toHaveAttribute("data-points", "5"); // wind
+      expect(composedCharts[3]).toHaveAttribute("data-points", "5"); // humidity & cloud cover
     });
   });
 

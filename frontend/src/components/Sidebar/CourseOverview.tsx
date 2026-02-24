@@ -14,7 +14,7 @@ import type { CategoricalChartState } from "recharts/types/chart/types";
 import type { Checkpoint, RaceForecastResponse } from "../../api/types";
 import { chartColors, colors, uncertaintyOpacity, secondaryLineOpacity } from "../../styles/theme";
 import { tooltipStyle, tickStyle, axisLineStyle } from "../../styles/chartStyles";
-import { formatTemp, formatWind, formatPrecip, windDirectionLabel, formatTimeWithZone, formatDate, formatCheckBackMessage } from "../../utils/formatting";
+import { formatTemp, formatWind, formatPrecip, formatPercent, windDirectionLabel, formatTimeWithZone, formatDate, formatCheckBackMessage } from "../../utils/formatting";
 
 interface CourseOverviewProps {
   /** Race forecast data for all checkpoints. */
@@ -50,10 +50,12 @@ interface ChartDataPoint {
   precipitation: number;
   precipMin: number | null;
   precipMax: number | null;
+  humidity: number | null;
+  cloudCover: number | null;
 }
 
 /**
- * Course overview with 3 stacked sparkline charts showing weather
+ * Course overview with 4 stacked sparkline charts showing weather
  * along the entire race course (Section 5.5).
  */
 const CourseOverview = memo(function CourseOverview({
@@ -128,6 +130,8 @@ const CourseOverview = memo(function CourseOverview({
           precipitation: w.precipitation_mm,
           precipMin: w.precipitation_min_mm ?? null,
           precipMax: w.precipitation_max_mm ?? null,
+          humidity: w.humidity_pct ?? null,
+          cloudCover: w.cloud_cover_pct ?? null,
         };
       });
   }, [raceForecast]);
@@ -167,7 +171,7 @@ const CourseOverview = memo(function CourseOverview({
           Weather Along the Course
         </h2>
         <div className="space-y-6" role="status" aria-label="Loading forecast data">
-          {[...Array(3)].map((_, i) => (
+          {[...Array(4)].map((_, i) => (
             <div
               key={i}
               className="h-24 animate-pulse rounded-lg bg-surface-alt"
@@ -441,6 +445,66 @@ const CourseOverview = memo(function CourseOverview({
                   {data[index]?.windDirection}
                 </text>
               )}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </SparklineSection>
+
+      {/* Humidity & Cloud Cover chart */}
+      <SparklineSection title="Humidity & Cloud Cover" unit="%">
+        <ResponsiveContainer width="100%" height={120}>
+          <ComposedChart
+            data={data}
+            margin={{ top: 5, right: 5, bottom: 5, left: 0 }}
+            onMouseMove={handleChartMouseMove}
+            onMouseLeave={handleChartMouseLeave}
+          >
+            <XAxis
+              dataKey="distance"
+              tick={tickStyle}
+              tickFormatter={(v: number) => `${v} km`}
+              axisLine={axisLineStyle}
+              tickLine={false}
+            />
+            <YAxis
+              tick={tickStyle}
+              tickFormatter={(v: number) => formatPercent(v)}
+              axisLine={false}
+              tickLine={false}
+              width={45}
+              domain={[0, 100]}
+            />
+            <Tooltip
+              contentStyle={tooltipStyle}
+              formatter={(value: number, name: string) => {
+                return [formatPercent(value), name];
+              }}
+              labelFormatter={(_v: number, payload: { payload?: ChartDataPoint }[]) => {
+                const p = payload?.[0]?.payload;
+                if (!p) return `${_v} km`;
+                return `${p.distance} km · ${formatTimeWithZone(p.expectedTime)}`;
+              }}
+            />
+            <ReferenceLine x={hoveredDistance ?? 0} stroke={colors.accentRose} strokeDasharray="3 3" strokeWidth={1} strokeOpacity={hoveredDistance != null ? 1 : 0} ifOverflow="hidden" />
+            <Line
+              type="monotone"
+              dataKey="cloudCover"
+              stroke={chartColors.cloudCover}
+              strokeWidth={2}
+              dot={{ fill: chartColors.cloudCover, r: 3 }}
+              activeDot={{ r: 5 }}
+              name="Cloud Cover"
+              connectNulls
+            />
+            <Line
+              type="monotone"
+              dataKey="humidity"
+              stroke={chartColors.humidity}
+              strokeWidth={2}
+              dot={{ fill: chartColors.humidity, r: 3 }}
+              activeDot={{ r: 5 }}
+              name="Humidity"
+              connectNulls
             />
           </ComposedChart>
         </ResponsiveContainer>

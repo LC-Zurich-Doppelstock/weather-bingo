@@ -16,7 +16,7 @@ import {
   secondaryLineOpacity,
 } from "../../styles/theme";
 import { tooltipStyle, tickStyle, axisLineStyle } from "../../styles/chartStyles";
-import { formatTemp, formatWind, formatPrecip } from "../../utils/formatting";
+import { formatTemp, formatWind, formatPrecip, formatPercent } from "../../utils/formatting";
 
 /** Chevron-down SVG icon (rotates when collapsed). */
 function ChevronIcon({ collapsed }: { collapsed: boolean }) {
@@ -49,6 +49,8 @@ interface HistoryDataPoint {
   precipRange: [number, number] | null;
   wind: number;
   windRange: [number, number] | null;
+  humidity: number | null;
+  cloudCover: number | null;
 }
 
 /** Format ISO timestamp to short date label: "Feb 19" or "Feb 19 18:00". */
@@ -113,8 +115,8 @@ interface ForecastHistoryProps {
 
 /**
  * Collapsible forecast history section showing how yr.no predictions
- * evolved across model runs. Three charts: temperature, precipitation, wind.
- * Lazy-loads data on first expand.
+ * evolved across model runs. Four charts: temperature, precipitation, wind,
+ * humidity & cloud cover. Lazy-loads data on first expand.
  */
 export default function ForecastHistory({
   checkpointId,
@@ -158,6 +160,8 @@ export default function ForecastHistory({
           w.wind_speed_percentile_90_ms != null
             ? ([w.wind_speed_percentile_10_ms, w.wind_speed_percentile_90_ms] as [number, number])
             : null,
+        humidity: w.humidity_pct ?? null,
+        cloudCover: w.cloud_cover_pct ?? null,
       };
     });
   }, [history]);
@@ -185,13 +189,13 @@ export default function ForecastHistory({
       <div
         id="forecast-history-panel"
         className={`overflow-hidden transition-all duration-200 ${
-          expanded ? "max-h-[600px]" : "max-h-0"
+          expanded ? "max-h-[800px]" : "max-h-0"
         }`}
       >
         <div className="mt-3 space-y-1">
           {isLoading && (
             <div className="space-y-2" role="status" aria-label="Loading history">
-              {[...Array(3)].map((_, i) => (
+              {[...Array(4)].map((_, i) => (
                 <div
                   key={i}
                   className="h-20 animate-pulse rounded-lg bg-surface-alt"
@@ -408,6 +412,59 @@ export default function ForecastHistory({
                       dot={false}
                       activeDot={{ r: 4 }}
                       name="Wind"
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </HistorySection>
+
+              {/* Humidity & Cloud Cover chart */}
+              <HistorySection title="Humidity & Cloud Cover" unit="%">
+                <ResponsiveContainer width="100%" height={100}>
+                  <ComposedChart
+                    data={chartData}
+                    margin={{ top: 5, right: 5, bottom: 5, left: 0 }}
+                  >
+                    <XAxis
+                      dataKey="modelRunEpoch"
+                      type="number"
+                      scale="time"
+                      domain={["dataMin", "dataMax"]}
+                      tickFormatter={makeTickFormatter(needsTime)}
+                      tick={tickStyle}
+                      axisLine={axisLineStyle}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tick={tickStyle}
+                      tickFormatter={(v: number) => formatPercent(v)}
+                      axisLine={false}
+                      tickLine={false}
+                      width={45}
+                      domain={[0, 100]}
+                    />
+                    <Tooltip
+                      contentStyle={tooltipStyle}
+                      formatter={(value: number, name: string) => [formatPercent(value), name]}
+                      labelFormatter={formatTooltipFromEpoch}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="cloudCover"
+                      stroke={chartColors.cloudCover}
+                      strokeWidth={1.5}
+                      dot={false}
+                      name="Cloud cover"
+                      connectNulls
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="humidity"
+                      stroke={chartColors.humidity}
+                      strokeWidth={2}
+                      dot={false}
+                      activeDot={{ r: 4 }}
+                      name="Humidity"
+                      connectNulls
                     />
                   </ComposedChart>
                 </ResponsiveContainer>
