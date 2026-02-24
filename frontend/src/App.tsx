@@ -27,6 +27,7 @@ function App() {
   const [checkpointTimes, setCheckpointTimes] = useState<Map<string, string>>(
     () => new Map()
   );
+  const [pacingProfile, setPacingProfile] = useState<Array<{ distance_km: number; time: string }> | null>(null);
 
   const { data: races } = useRaces();
   const { data: course } = useCourse(selectedRaceId);
@@ -113,6 +114,7 @@ function App() {
             hoveredCheckpointId={hoveredCheckpointId}
             selectedCheckpointId={selectedCheckpointId}
             checkpointTimes={checkpointTimes}
+            pacingProfile={pacingProfile}
             onCheckpointHover={setHoveredCheckpointId}
           />
         </div>
@@ -128,6 +130,7 @@ function App() {
             onClearSelection={handleClearSelection}
             onCheckpointHover={setHoveredCheckpointId}
             onCheckpointTimesChange={setCheckpointTimes}
+            onPacingProfileChange={setPacingProfile}
           />
         </aside>
       </main>

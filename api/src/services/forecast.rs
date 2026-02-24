@@ -20,6 +20,7 @@ use crate::db::models::{Checkpoint, Forecast};
 use crate::db::queries::{self, InsertForecastParams};
 use crate::errors::AppError;
 use crate::helpers::{dec_to_f64, f64_to_decimal_1dp};
+use crate::services::gpx::TrackPoint;
 use crate::services::yr::{
     extract_forecasts_at_times, parse_expires_header, ExtractionResult, YrClient, YrParsedForecast,
     YrTimeseriesResult,
@@ -225,6 +226,308 @@ pub fn calculate_pass_time_fractions(checkpoints: &[PacingCheckpoint]) -> Vec<f6
     }
 
     fractions
+}
+
+/// Compute cumulative time fractions using the full GPS track elevation profile.
+///
+/// Like [`calculate_pass_time_fractions`], but instead of using net elevation
+/// between consecutive checkpoints, this slices the dense GPS track between
+/// each pair of checkpoints and accumulates micro-elevation costs for every
+/// pair of consecutive track points. This correctly accounts for terrain like
+/// "up 200m then down 200m" which the simple function treats as flat.
+///
+/// # Arguments
+/// * `checkpoints` — Checkpoint positions with `distance_km` and `elevation_m`.
+///   Must be sorted by distance. Used to define segment boundaries.
+/// * `track` — Dense GPS track with cumulative `distance_km` and `elevation_m`
+///   from [`compute_track_profile`](crate::services::gpx::compute_track_profile).
+///   Must be sorted by distance.
+///
+/// # Fallback
+/// If `track` is empty or no track points fall within a segment, that segment
+/// falls back to the simple net-elevation calculation.
+///
+/// # Returns
+/// A `Vec<f64>` of the same length as `checkpoints` (same semantics as
+/// `calculate_pass_time_fractions`).
+#[cfg(test)]
+pub fn calculate_pass_time_fractions_with_track(
+    checkpoints: &[PacingCheckpoint],
+    track: &[TrackPoint],
+) -> Vec<f64> {
+    let n = checkpoints.len();
+    if n == 0 {
+        return vec![];
+    }
+    if n == 1 {
+        return vec![0.0];
+    }
+
+    // If track is empty, fall back to the simple function
+    if track.is_empty() {
+        return calculate_pass_time_fractions(checkpoints);
+    }
+
+    // Compute cost for each segment between consecutive checkpoints
+    let mut segment_costs = Vec::with_capacity(n - 1);
+    let mut track_idx = 0; // cursor into the track array
+
+    for i in 0..(n - 1) {
+        let seg_start_km = checkpoints[i].distance_km;
+        let seg_end_km = checkpoints[i + 1].distance_km;
+
+        if seg_end_km <= seg_start_km {
+            segment_costs.push(0.0);
+            continue;
+        }
+
+        // Advance cursor to the first track point at or after seg_start_km
+        while track_idx < track.len() && track[track_idx].distance_km < seg_start_km {
+            track_idx += 1;
+        }
+
+        // Collect track points within this segment (inclusive of boundaries)
+        // We need the last point before seg_start_km as an anchor if available
+        let mut seg_points: Vec<(f64, f64)> = Vec::new(); // (distance_km, elevation_m)
+
+        // Add interpolated start point at the checkpoint boundary
+        let start_ele = interpolate_elevation(track, seg_start_km, checkpoints[i].elevation_m);
+        seg_points.push((seg_start_km, start_ele));
+
+        // Add all track points strictly within the segment
+        let mut j = track_idx;
+        while j < track.len() && track[j].distance_km <= seg_end_km {
+            let tp = &track[j];
+            // Only add if past the start (avoid duplicate at boundary)
+            if tp.distance_km > seg_start_km && tp.distance_km < seg_end_km {
+                seg_points.push((tp.distance_km, tp.elevation_m));
+            }
+            j += 1;
+        }
+
+        // Add interpolated end point at the checkpoint boundary
+        let end_ele = interpolate_elevation(track, seg_end_km, checkpoints[i + 1].elevation_m);
+        seg_points.push((seg_end_km, end_ele));
+
+        // Accumulate micro-costs from consecutive track point pairs
+        let mut segment_cost = 0.0;
+        for k in 0..(seg_points.len() - 1) {
+            let (d0, e0) = seg_points[k];
+            let (d1, e1) = seg_points[k + 1];
+            let dist_delta = d1 - d0;
+            if dist_delta <= 0.0 {
+                continue;
+            }
+            let ele_delta = e1 - e0;
+            let gradient = ele_delta / (dist_delta * 1000.0);
+
+            let cost_factor = if gradient >= 0.0 {
+                (1.0 + K_UP * gradient).max(MIN_COST_FACTOR)
+            } else {
+                (1.0 - K_DOWN * gradient.abs()).max(MIN_COST_FACTOR)
+            };
+
+            segment_cost += cost_factor * dist_delta;
+        }
+
+        segment_costs.push(segment_cost);
+    }
+
+    let total_cost: f64 = segment_costs.iter().sum();
+    if total_cost <= 0.0 {
+        // Degenerate case — fall back to even pacing by distance
+        let total_dist = checkpoints.last().unwrap().distance_km;
+        if total_dist <= 0.0 {
+            return (0..n).map(|i| i as f64 / (n - 1) as f64).collect();
+        }
+        return checkpoints
+            .iter()
+            .map(|cp| cp.distance_km / total_dist)
+            .collect();
+    }
+
+    // Build cumulative fractions
+    let mut fractions = Vec::with_capacity(n);
+    fractions.push(0.0);
+    let mut cumulative = 0.0;
+    for cost in &segment_costs {
+        cumulative += cost;
+        fractions.push(cumulative / total_cost);
+    }
+
+    // Ensure last fraction is exactly 1.0 (avoid floating-point drift)
+    if let Some(last) = fractions.last_mut() {
+        *last = 1.0;
+    }
+
+    fractions
+}
+
+/// Compute per-track-point cumulative time fractions using the elevation-cost model.
+///
+/// For each consecutive pair of track points, computes the elevation-gradient
+/// cost (same formula as `calculate_pass_time_fractions_with_track`), then
+/// normalises to produce a cumulative fraction from 0.0 (start) to 1.0 (end).
+///
+/// The result is downsampled to at most `max_points` entries (evenly spaced by
+/// index, always including first and last). This keeps the API response size
+/// reasonable for large GPS tracks (~4000 points → ~500 points).
+///
+/// # Returns
+/// A `Vec<(f64, f64)>` of `(distance_km, time_fraction)` pairs, sorted by
+/// distance. Empty if track has fewer than 2 points.
+pub fn compute_pacing_profile(track: &[TrackPoint], max_points: usize) -> Vec<(f64, f64)> {
+    if track.len() < 2 {
+        return track.iter().map(|tp| (tp.distance_km, 0.0)).collect();
+    }
+
+    // Step 1: compute micro-costs for each consecutive pair
+    let mut cumulative_costs = Vec::with_capacity(track.len());
+    cumulative_costs.push(0.0_f64);
+    let mut total_cost = 0.0_f64;
+
+    for i in 1..track.len() {
+        let dist_delta = track[i].distance_km - track[i - 1].distance_km;
+        if dist_delta <= 0.0 {
+            cumulative_costs.push(total_cost);
+            continue;
+        }
+        let ele_delta = track[i].elevation_m - track[i - 1].elevation_m;
+        let gradient = ele_delta / (dist_delta * 1000.0);
+
+        let cost_factor = if gradient >= 0.0 {
+            (1.0 + K_UP * gradient).max(MIN_COST_FACTOR)
+        } else {
+            (1.0 - K_DOWN * gradient.abs()).max(MIN_COST_FACTOR)
+        };
+
+        total_cost += cost_factor * dist_delta;
+        cumulative_costs.push(total_cost);
+    }
+
+    // Step 2: normalise to fractions [0.0, 1.0]
+    let fractions: Vec<f64> = if total_cost <= 0.0 {
+        // Degenerate: even pacing by distance
+        let total_dist = track.last().unwrap().distance_km;
+        if total_dist <= 0.0 {
+            (0..track.len())
+                .map(|i| i as f64 / (track.len() - 1) as f64)
+                .collect()
+        } else {
+            track.iter().map(|tp| tp.distance_km / total_dist).collect()
+        }
+    } else {
+        cumulative_costs.iter().map(|c| c / total_cost).collect()
+    };
+
+    // Step 3: build full profile
+    let full: Vec<(f64, f64)> = track
+        .iter()
+        .zip(fractions.iter())
+        .map(|(tp, &f)| (tp.distance_km, f))
+        .collect();
+
+    // Step 4: downsample if needed
+    if full.len() <= max_points {
+        return full;
+    }
+
+    let mut sampled = Vec::with_capacity(max_points);
+    let step = (full.len() - 1) as f64 / (max_points - 1) as f64;
+    for i in 0..max_points {
+        let idx = (i as f64 * step).round() as usize;
+        let idx = idx.min(full.len() - 1);
+        sampled.push(full[idx]);
+    }
+    // Ensure last point is exactly included
+    if let (Some(last_sampled), Some(last_full)) = (sampled.last(), full.last()) {
+        if (last_sampled.0 - last_full.0).abs() > 1e-10 {
+            *sampled.last_mut().unwrap() = *last_full;
+        }
+    }
+
+    sampled
+}
+
+/// Interpolate a time fraction from a precomputed pacing profile at a given distance.
+///
+/// Uses binary search to find the bracketing `(distance_km, time_fraction)` pair,
+/// then linearly interpolates. Returns 0.0 for distances at or before the start,
+/// and 1.0 for distances at or beyond the end.
+///
+/// This is used to derive checkpoint fractions from the pacing profile, ensuring
+/// that checkpoint `expected_time` values are perfectly consistent with the
+/// per-track-point profile shown in the elevation chart tooltip.
+pub fn interpolate_fraction_from_profile(profile: &[(f64, f64)], target_km: f64) -> f64 {
+    if profile.is_empty() {
+        return 0.0;
+    }
+    if profile.len() == 1 {
+        return profile[0].1;
+    }
+
+    // Before or at start
+    if target_km <= profile[0].0 {
+        return profile[0].1;
+    }
+    // At or beyond end
+    let last = profile[profile.len() - 1];
+    if target_km >= last.0 {
+        return last.1;
+    }
+
+    // Binary search for the bracketing interval
+    let idx = profile.partition_point(|&(d, _)| d < target_km);
+    if idx == 0 {
+        return profile[0].1;
+    }
+
+    let (d0, f0) = profile[idx - 1];
+    let (d1, f1) = profile[idx];
+    let range = d1 - d0;
+    if range <= 0.0 {
+        return f0;
+    }
+
+    let t = (target_km - d0) / range;
+    f0 + t * (f1 - f0)
+}
+
+/// Interpolate elevation at a given distance along the track.
+///
+/// Finds the two track points that bracket `target_km` and linearly interpolates.
+/// If `target_km` is outside the track range, returns `fallback`.
+#[cfg(test)]
+fn interpolate_elevation(track: &[TrackPoint], target_km: f64, fallback: f64) -> f64 {
+    if track.is_empty() {
+        return fallback;
+    }
+
+    // Before the track starts
+    if target_km <= track[0].distance_km {
+        return track[0].elevation_m;
+    }
+
+    // After the track ends
+    if target_km >= track[track.len() - 1].distance_km {
+        return track[track.len() - 1].elevation_m;
+    }
+
+    // Binary search for the bracketing interval
+    let idx = track.partition_point(|tp| tp.distance_km < target_km);
+    if idx == 0 {
+        return track[0].elevation_m;
+    }
+
+    let before = &track[idx - 1];
+    let after = &track[idx];
+    let range = after.distance_km - before.distance_km;
+    if range <= 0.0 {
+        return before.elevation_m;
+    }
+
+    let t = (target_km - before.distance_km) / range;
+    before.elevation_m + t * (after.elevation_m - before.elevation_m)
 }
 
 /// Calculate expected pass-through time from a precomputed time fraction.
@@ -985,6 +1288,531 @@ mod tests {
         assert!((fractions[0] - 0.0).abs() < 1e-10);
     }
 
+    // --- Track-aware pacing tests ---
+
+    use crate::services::gpx::TrackPoint;
+
+    /// Helper: build a linear track between two points with `n` intermediate steps.
+    fn make_linear_track(
+        start_km: f64,
+        start_ele: f64,
+        end_km: f64,
+        end_ele: f64,
+        n: usize,
+    ) -> Vec<TrackPoint> {
+        (0..=n)
+            .map(|i| {
+                let t = i as f64 / n as f64;
+                TrackPoint {
+                    distance_km: start_km + t * (end_km - start_km),
+                    elevation_m: start_ele + t * (end_ele - start_ele),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_track_pacing_empty_track_falls_back() {
+        // With empty track, should produce same result as simple function
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 100.0,
+            },
+            PacingCheckpoint {
+                distance_km: 45.0,
+                elevation_m: 300.0,
+            },
+            PacingCheckpoint {
+                distance_km: 90.0,
+                elevation_m: 100.0,
+            },
+        ];
+        let simple = calculate_pass_time_fractions(&checkpoints);
+        let track_aware = calculate_pass_time_fractions_with_track(&checkpoints, &[]);
+        assert_eq!(simple.len(), track_aware.len());
+        for (s, t) in simple.iter().zip(track_aware.iter()) {
+            assert!(
+                (s - t).abs() < 1e-10,
+                "Empty track should match simple: {} vs {}",
+                s,
+                t
+            );
+        }
+    }
+
+    #[test]
+    fn test_track_pacing_empty_checkpoints() {
+        let fractions = calculate_pass_time_fractions_with_track(&[], &[]);
+        assert!(fractions.is_empty());
+    }
+
+    #[test]
+    fn test_track_pacing_single_checkpoint() {
+        let checkpoints = vec![PacingCheckpoint {
+            distance_km: 0.0,
+            elevation_m: 100.0,
+        }];
+        let fractions = calculate_pass_time_fractions_with_track(
+            &checkpoints,
+            &[TrackPoint {
+                distance_km: 0.0,
+                elevation_m: 100.0,
+            }],
+        );
+        assert_eq!(fractions.len(), 1);
+        assert!((fractions[0] - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_track_pacing_flat_matches_simple() {
+        // Flat track and flat checkpoints — track-aware should match simple
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 100.0,
+            },
+            PacingCheckpoint {
+                distance_km: 30.0,
+                elevation_m: 100.0,
+            },
+            PacingCheckpoint {
+                distance_km: 60.0,
+                elevation_m: 100.0,
+            },
+            PacingCheckpoint {
+                distance_km: 90.0,
+                elevation_m: 100.0,
+            },
+        ];
+        let track = make_linear_track(0.0, 100.0, 90.0, 100.0, 100);
+        let simple = calculate_pass_time_fractions(&checkpoints);
+        let track_aware = calculate_pass_time_fractions_with_track(&checkpoints, &track);
+        assert_eq!(simple.len(), track_aware.len());
+        for (s, t) in simple.iter().zip(track_aware.iter()) {
+            assert!(
+                (s - t).abs() < 1e-6,
+                "Flat track should match simple: {} vs {}",
+                s,
+                t
+            );
+        }
+    }
+
+    #[test]
+    fn test_track_pacing_linear_uphill_matches_simple() {
+        // Monotonically rising track — track-aware should closely match simple
+        // because net elevation = cumulative elevation for a monotonic profile
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 100.0,
+            },
+            PacingCheckpoint {
+                distance_km: 45.0,
+                elevation_m: 350.0,
+            },
+            PacingCheckpoint {
+                distance_km: 90.0,
+                elevation_m: 600.0,
+            },
+        ];
+        let track = make_linear_track(0.0, 100.0, 90.0, 600.0, 200);
+        let simple = calculate_pass_time_fractions(&checkpoints);
+        let track_aware = calculate_pass_time_fractions_with_track(&checkpoints, &track);
+        assert_eq!(simple.len(), track_aware.len());
+        for (s, t) in simple.iter().zip(track_aware.iter()) {
+            assert!(
+                (s - t).abs() < 0.01,
+                "Monotonic uphill should closely match simple: {} vs {}",
+                s,
+                t
+            );
+        }
+    }
+
+    #[test]
+    fn test_track_pacing_hidden_hills_more_costly_than_flat() {
+        // Key test: segment from 0–45 km looks flat (net ele = 0) but the track
+        // goes up 200m then down 200m. The track-aware cost should be higher
+        // than what simple function computes (which sees gradient=0, cost=1.0).
+
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 100.0,
+            },
+            PacingCheckpoint {
+                distance_km: 45.0,
+                elevation_m: 100.0, // net elevation = 0
+            },
+            PacingCheckpoint {
+                distance_km: 90.0,
+                elevation_m: 100.0,
+            },
+        ];
+
+        // Track for first segment: up 200m to the midpoint, then down 200m
+        let mut track = Vec::new();
+        for i in 0..=100 {
+            let t = i as f64 / 100.0;
+            let d = t * 45.0;
+            // Triangle profile: up to 300m at midpoint (22.5 km), back to 100m
+            let ele = if t <= 0.5 {
+                100.0 + 400.0 * t // 100 → 300 over 22.5 km
+            } else {
+                300.0 - 400.0 * (t - 0.5) // 300 → 100 over 22.5 km
+            };
+            track.push(TrackPoint {
+                distance_km: d,
+                elevation_m: ele,
+            });
+        }
+        // Second segment: flat
+        for i in 1..=100 {
+            let t = i as f64 / 100.0;
+            track.push(TrackPoint {
+                distance_km: 45.0 + t * 45.0,
+                elevation_m: 100.0,
+            });
+        }
+
+        let simple = calculate_pass_time_fractions(&checkpoints);
+        let track_aware = calculate_pass_time_fractions_with_track(&checkpoints, &track);
+
+        // Simple sees both segments as flat → 50/50 split
+        assert!(
+            (simple[1] - 0.5).abs() < 1e-6,
+            "Simple should give 50/50 for net-flat segments, got {}",
+            simple[1]
+        );
+
+        // Track-aware should assign MORE time to the first segment (hidden hills)
+        assert!(
+            track_aware[1] > 0.5,
+            "Track-aware should give >50% to segment with hidden hills, got {:.4}",
+            track_aware[1]
+        );
+        // Sanity: it shouldn't be ridiculous
+        assert!(
+            track_aware[1] < 0.85,
+            "Track-aware first segment fraction shouldn't be extreme, got {:.4}",
+            track_aware[1]
+        );
+    }
+
+    #[test]
+    fn test_track_pacing_hidden_valley_more_costly_than_flat() {
+        // Segment looks flat (net=0) but dips down 200m then back up 200m.
+        // Going down then up should also cost more than flat.
+
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 300.0,
+            },
+            PacingCheckpoint {
+                distance_km: 45.0,
+                elevation_m: 300.0,
+            },
+            PacingCheckpoint {
+                distance_km: 90.0,
+                elevation_m: 300.0,
+            },
+        ];
+
+        // Track for first segment: down 200m to midpoint, then back up 200m
+        let mut track = Vec::new();
+        for i in 0..=100 {
+            let t = i as f64 / 100.0;
+            let d = t * 45.0;
+            let ele = if t <= 0.5 {
+                300.0 - 400.0 * t // 300 → 100
+            } else {
+                100.0 + 400.0 * (t - 0.5) // 100 → 300
+            };
+            track.push(TrackPoint {
+                distance_km: d,
+                elevation_m: ele,
+            });
+        }
+        // Second segment: flat
+        for i in 1..=100 {
+            let t = i as f64 / 100.0;
+            track.push(TrackPoint {
+                distance_km: 45.0 + t * 45.0,
+                elevation_m: 300.0,
+            });
+        }
+
+        let track_aware = calculate_pass_time_fractions_with_track(&checkpoints, &track);
+
+        // First segment has hidden valley → more costly
+        assert!(
+            track_aware[1] > 0.5,
+            "Hidden valley should cost more than flat, got {:.4}",
+            track_aware[1]
+        );
+    }
+
+    #[test]
+    fn test_track_pacing_monotonically_increasing_fractions() {
+        // Vasaloppet-like profile with dense track
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 349.0,
+            },
+            PacingCheckpoint {
+                distance_km: 11.0,
+                elevation_m: 502.0,
+            },
+            PacingCheckpoint {
+                distance_km: 24.0,
+                elevation_m: 390.0,
+            },
+            PacingCheckpoint {
+                distance_km: 35.0,
+                elevation_m: 396.0,
+            },
+            PacingCheckpoint {
+                distance_km: 47.0,
+                elevation_m: 419.0,
+            },
+            PacingCheckpoint {
+                distance_km: 62.0,
+                elevation_m: 231.0,
+            },
+            PacingCheckpoint {
+                distance_km: 71.0,
+                elevation_m: 247.0,
+            },
+            PacingCheckpoint {
+                distance_km: 81.0,
+                elevation_m: 206.0,
+            },
+            PacingCheckpoint {
+                distance_km: 90.0,
+                elevation_m: 168.0,
+            },
+        ];
+
+        // Build a track that follows the checkpoints linearly between them
+        let mut track = Vec::new();
+        for i in 0..(checkpoints.len() - 1) {
+            let steps = 20;
+            for s in 0..steps {
+                let t = s as f64 / steps as f64;
+                track.push(TrackPoint {
+                    distance_km: checkpoints[i].distance_km
+                        + t * (checkpoints[i + 1].distance_km - checkpoints[i].distance_km),
+                    elevation_m: checkpoints[i].elevation_m
+                        + t * (checkpoints[i + 1].elevation_m - checkpoints[i].elevation_m),
+                });
+            }
+        }
+        track.push(TrackPoint {
+            distance_km: 90.0,
+            elevation_m: 168.0,
+        });
+
+        let fractions = calculate_pass_time_fractions_with_track(&checkpoints, &track);
+        assert_eq!(fractions.len(), 9);
+        assert!((fractions[0] - 0.0).abs() < 1e-10, "Start should be 0.0");
+        assert!((fractions[8] - 1.0).abs() < 1e-10, "Finish should be 1.0");
+
+        for i in 1..fractions.len() {
+            assert!(
+                fractions[i] >= fractions[i - 1],
+                "Fractions should be monotonically increasing: f[{}]={} < f[{}]={}",
+                i,
+                fractions[i],
+                i - 1,
+                fractions[i - 1]
+            );
+        }
+    }
+
+    #[test]
+    fn test_track_pacing_with_real_vasaloppet_gpx() {
+        // Use the actual Vasaloppet GPX to test with real-world data
+        use crate::services::gpx::{compute_track_profile, extract_track_points};
+
+        let gpx = include_str!("../../../data/vasaloppet-2026.gpx");
+        let course_points = extract_track_points(gpx).unwrap();
+        let track = compute_track_profile(&course_points);
+
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 349.0,
+            },
+            PacingCheckpoint {
+                distance_km: 11.0,
+                elevation_m: 502.0,
+            },
+            PacingCheckpoint {
+                distance_km: 24.0,
+                elevation_m: 390.0,
+            },
+            PacingCheckpoint {
+                distance_km: 35.0,
+                elevation_m: 396.0,
+            },
+            PacingCheckpoint {
+                distance_km: 47.0,
+                elevation_m: 419.0,
+            },
+            PacingCheckpoint {
+                distance_km: 62.0,
+                elevation_m: 231.0,
+            },
+            PacingCheckpoint {
+                distance_km: 71.0,
+                elevation_m: 247.0,
+            },
+            PacingCheckpoint {
+                distance_km: 81.0,
+                elevation_m: 206.0,
+            },
+            PacingCheckpoint {
+                distance_km: 90.0,
+                elevation_m: 168.0,
+            },
+        ];
+
+        let simple = calculate_pass_time_fractions(&checkpoints);
+        let track_aware = calculate_pass_time_fractions_with_track(&checkpoints, &track);
+
+        assert_eq!(track_aware.len(), 9);
+        assert!((track_aware[0] - 0.0).abs() < 1e-10);
+        assert!((track_aware[8] - 1.0).abs() < 1e-10);
+
+        // Monotonically increasing
+        for i in 1..track_aware.len() {
+            assert!(
+                track_aware[i] >= track_aware[i - 1],
+                "Real GPX fractions should be monotonic: f[{}]={} < f[{}]={}",
+                i,
+                track_aware[i],
+                i - 1,
+                track_aware[i - 1]
+            );
+        }
+
+        // Track-aware should differ from simple (the real GPX has hidden hills)
+        let mut any_different = false;
+        for (s, t) in simple.iter().zip(track_aware.iter()) {
+            if (s - t).abs() > 0.001 {
+                any_different = true;
+                break;
+            }
+        }
+        assert!(
+            any_different,
+            "Real Vasaloppet GPX should produce different fractions than simple model"
+        );
+
+        // First segment (Berga→Smågan, steep uphill) should still be the most
+        // time-consuming per km — track-aware should still show it > even pacing
+        let even_fraction = 11.0 / 90.0;
+        assert!(
+            track_aware[1] > even_fraction,
+            "Berga→Smågan track-aware should exceed even pacing ({:.3}), got {:.3}",
+            even_fraction,
+            track_aware[1]
+        );
+    }
+
+    #[test]
+    fn test_track_pacing_sparse_track_still_works() {
+        // Track with fewer points than checkpoints — some segments may have no
+        // intermediate track points. Should still produce valid results.
+        let checkpoints = vec![
+            PacingCheckpoint {
+                distance_km: 0.0,
+                elevation_m: 100.0,
+            },
+            PacingCheckpoint {
+                distance_km: 30.0,
+                elevation_m: 200.0,
+            },
+            PacingCheckpoint {
+                distance_km: 60.0,
+                elevation_m: 150.0,
+            },
+            PacingCheckpoint {
+                distance_km: 90.0,
+                elevation_m: 100.0,
+            },
+        ];
+
+        // Very sparse track: only 3 points — some segments will have no interior points
+        let track = vec![
+            TrackPoint {
+                distance_km: 0.0,
+                elevation_m: 100.0,
+            },
+            TrackPoint {
+                distance_km: 45.0,
+                elevation_m: 250.0,
+            },
+            TrackPoint {
+                distance_km: 90.0,
+                elevation_m: 100.0,
+            },
+        ];
+
+        let fractions = calculate_pass_time_fractions_with_track(&checkpoints, &track);
+        assert_eq!(fractions.len(), 4);
+        assert!((fractions[0] - 0.0).abs() < 1e-10);
+        assert!((fractions[3] - 1.0).abs() < 1e-10);
+
+        // Still monotonically increasing
+        for i in 1..fractions.len() {
+            assert!(
+                fractions[i] >= fractions[i - 1],
+                "Sparse track fractions should be monotonic"
+            );
+        }
+    }
+
+    #[test]
+    fn test_interpolate_elevation_at_boundaries() {
+        let track = vec![
+            TrackPoint {
+                distance_km: 0.0,
+                elevation_m: 100.0,
+            },
+            TrackPoint {
+                distance_km: 10.0,
+                elevation_m: 200.0,
+            },
+            TrackPoint {
+                distance_km: 20.0,
+                elevation_m: 300.0,
+            },
+        ];
+
+        // At exact track points
+        assert!((interpolate_elevation(&track, 0.0, 0.0) - 100.0).abs() < 1e-10);
+        assert!((interpolate_elevation(&track, 10.0, 0.0) - 200.0).abs() < 1e-10);
+        assert!((interpolate_elevation(&track, 20.0, 0.0) - 300.0).abs() < 1e-10);
+
+        // Interpolated midpoint
+        assert!((interpolate_elevation(&track, 5.0, 0.0) - 150.0).abs() < 1e-10);
+        assert!((interpolate_elevation(&track, 15.0, 0.0) - 250.0).abs() < 1e-10);
+
+        // Before track — returns first elevation
+        assert!((interpolate_elevation(&track, -5.0, 999.0) - 100.0).abs() < 1e-10);
+
+        // After track — returns last elevation
+        assert!((interpolate_elevation(&track, 25.0, 999.0) - 300.0).abs() < 1e-10);
+
+        // Empty track — returns fallback
+        assert!((interpolate_elevation(&[], 5.0, 42.0) - 42.0).abs() < 1e-10);
+    }
+
     #[test]
     fn test_build_single_insert_params() {
         use crate::services::yr::{ForecastResolution, YrParsedForecast};
@@ -1469,6 +2297,269 @@ mod tests {
             expected,
             result
         );
+    }
+
+    // --- compute_pacing_profile tests ---
+
+    #[test]
+    fn test_pacing_profile_empty_track() {
+        let profile = compute_pacing_profile(&[], 500);
+        assert!(profile.is_empty());
+    }
+
+    #[test]
+    fn test_pacing_profile_single_point() {
+        let track = vec![TrackPoint {
+            distance_km: 0.0,
+            elevation_m: 100.0,
+        }];
+        let profile = compute_pacing_profile(&track, 500);
+        assert_eq!(profile.len(), 1);
+        assert!((profile[0].0 - 0.0).abs() < 1e-10);
+        assert!((profile[0].1 - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_pacing_profile_flat_track_even_fractions() {
+        // Flat track → fractions should be proportional to distance
+        let track = make_linear_track(0.0, 100.0, 90.0, 100.0, 10);
+        let profile = compute_pacing_profile(&track, 500);
+
+        assert_eq!(profile.len(), 11);
+        assert!((profile[0].0 - 0.0).abs() < 1e-10);
+        assert!((profile[0].1 - 0.0).abs() < 1e-10);
+        assert!((profile[10].0 - 90.0).abs() < 1e-10);
+        assert!((profile[10].1 - 1.0).abs() < 1e-6);
+
+        // Flat → fractions should equal distance fractions
+        for p in &profile {
+            let expected_fraction = p.0 / 90.0;
+            assert!(
+                (p.1 - expected_fraction).abs() < 1e-6,
+                "Flat track: at {:.1} km, expected fraction {:.4}, got {:.4}",
+                p.0,
+                expected_fraction,
+                p.1
+            );
+        }
+    }
+
+    #[test]
+    fn test_pacing_profile_uphill_slower_than_distance() {
+        // Uphill track → time fraction should be ahead of distance fraction
+        // (i.e., at 50% distance you've used >50% of time because uphill is costly)
+        let track = make_linear_track(0.0, 100.0, 90.0, 600.0, 20);
+        let profile = compute_pacing_profile(&track, 500);
+
+        assert_eq!(profile.len(), 21);
+        assert!((profile[0].1 - 0.0).abs() < 1e-10);
+        assert!((profile[20].1 - 1.0).abs() < 1e-6);
+
+        // Monotonically increasing
+        for i in 1..profile.len() {
+            assert!(
+                profile[i].1 >= profile[i - 1].1,
+                "Profile should be monotonic: idx {} ({}) < idx {} ({})",
+                i,
+                profile[i].1,
+                i - 1,
+                profile[i - 1].1
+            );
+        }
+
+        // With constant uphill, fractions should still be proportional to distance
+        // because every micro-segment has the same gradient/cost factor
+        let mid = &profile[10]; // 50% distance
+        assert!(
+            (mid.1 - 0.5).abs() < 0.01,
+            "Constant uphill: midpoint fraction should be ~0.5, got {:.4}",
+            mid.1
+        );
+    }
+
+    #[test]
+    fn test_pacing_profile_mixed_terrain_monotonic() {
+        // Triangle track: up then down — profile should still be monotonic
+        let mut track = Vec::new();
+        for i in 0..=100 {
+            let t = i as f64 / 100.0;
+            let d = t * 90.0;
+            let ele = if t <= 0.5 {
+                100.0 + 400.0 * t
+            } else {
+                300.0 - 400.0 * (t - 0.5)
+            };
+            track.push(TrackPoint {
+                distance_km: d,
+                elevation_m: ele,
+            });
+        }
+
+        let profile = compute_pacing_profile(&track, 500);
+        assert_eq!(profile.len(), 101);
+        assert!((profile[0].1 - 0.0).abs() < 1e-10);
+        assert!((profile[100].1 - 1.0).abs() < 1e-6);
+
+        for i in 1..profile.len() {
+            assert!(
+                profile[i].1 >= profile[i - 1].1 - 1e-10,
+                "Mixed terrain profile should be monotonic"
+            );
+        }
+
+        // Uphill half should use more than 50% of time
+        let mid = &profile[50]; // at 45 km, the peak
+        assert!(
+            mid.1 > 0.5,
+            "Uphill half should take >50% of time, got {:.4}",
+            mid.1
+        );
+    }
+
+    #[test]
+    fn test_pacing_profile_downsampling() {
+        // Large track gets downsampled
+        let track = make_linear_track(0.0, 100.0, 90.0, 100.0, 1000);
+        assert_eq!(track.len(), 1001);
+
+        let profile = compute_pacing_profile(&track, 100);
+        assert_eq!(profile.len(), 100);
+
+        // First and last should be correct
+        assert!((profile[0].0 - 0.0).abs() < 1e-10);
+        assert!((profile[0].1 - 0.0).abs() < 1e-10);
+        assert!((profile[99].0 - 90.0).abs() < 1e-6);
+        assert!((profile[99].1 - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_pacing_profile_no_downsampling_when_under_limit() {
+        let track = make_linear_track(0.0, 100.0, 90.0, 100.0, 10);
+        let profile = compute_pacing_profile(&track, 500);
+        // 11 points < 500 max → no downsampling
+        assert_eq!(profile.len(), 11);
+    }
+
+    #[test]
+    fn test_pacing_profile_real_vasaloppet_gpx() {
+        use crate::services::gpx::{compute_track_profile, extract_track_points};
+
+        let gpx = include_str!("../../../data/vasaloppet-2026.gpx");
+        let course_points = extract_track_points(gpx).unwrap();
+        let track = compute_track_profile(&course_points);
+
+        let profile = compute_pacing_profile(&track, 500);
+
+        // Track has fewer points than max_points, so no downsampling
+        assert_eq!(profile.len(), track.len());
+
+        // Start and end
+        assert!((profile[0].0 - 0.0).abs() < 0.1);
+        assert!((profile[0].1 - 0.0).abs() < 1e-6);
+        let last = profile.last().unwrap();
+        assert!((last.1 - 1.0).abs() < 1e-6);
+
+        // Monotonically increasing
+        for i in 1..profile.len() {
+            assert!(
+                profile[i].1 >= profile[i - 1].1 - 1e-10,
+                "Real GPX profile should be monotonic at idx {}",
+                i
+            );
+            assert!(
+                profile[i].0 >= profile[i - 1].0 - 1e-10,
+                "Real GPX distances should be monotonic at idx {}",
+                i
+            );
+        }
+    }
+
+    // ---- interpolate_fraction_from_profile tests ----
+
+    #[test]
+    fn test_interpolate_fraction_empty_profile() {
+        assert!((interpolate_fraction_from_profile(&[], 5.0) - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_interpolate_fraction_single_point() {
+        let profile = vec![(0.0, 0.0)];
+        assert!((interpolate_fraction_from_profile(&profile, 0.0) - 0.0).abs() < 1e-10);
+        assert!((interpolate_fraction_from_profile(&profile, 10.0) - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_interpolate_fraction_at_exact_points() {
+        let profile = vec![(0.0, 0.0), (10.0, 0.4), (20.0, 0.7), (30.0, 1.0)];
+        assert!((interpolate_fraction_from_profile(&profile, 0.0) - 0.0).abs() < 1e-10);
+        assert!((interpolate_fraction_from_profile(&profile, 10.0) - 0.4).abs() < 1e-10);
+        assert!((interpolate_fraction_from_profile(&profile, 20.0) - 0.7).abs() < 1e-10);
+        assert!((interpolate_fraction_from_profile(&profile, 30.0) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_interpolate_fraction_midpoint() {
+        let profile = vec![(0.0, 0.0), (10.0, 0.4), (20.0, 1.0)];
+        // Midpoint between (0, 0.0) and (10, 0.4) at distance 5.0
+        let f = interpolate_fraction_from_profile(&profile, 5.0);
+        assert!((f - 0.2).abs() < 1e-10, "Expected 0.2, got {}", f);
+        // Midpoint between (10, 0.4) and (20, 1.0) at distance 15.0
+        let f = interpolate_fraction_from_profile(&profile, 15.0);
+        assert!((f - 0.7).abs() < 1e-10, "Expected 0.7, got {}", f);
+    }
+
+    #[test]
+    fn test_interpolate_fraction_before_start() {
+        let profile = vec![(5.0, 0.1), (15.0, 0.5), (25.0, 1.0)];
+        let f = interpolate_fraction_from_profile(&profile, 0.0);
+        assert!(
+            (f - 0.1).abs() < 1e-10,
+            "Should return first point fraction"
+        );
+    }
+
+    #[test]
+    fn test_interpolate_fraction_beyond_end() {
+        let profile = vec![(0.0, 0.0), (10.0, 0.5), (20.0, 1.0)];
+        let f = interpolate_fraction_from_profile(&profile, 30.0);
+        assert!((f - 1.0).abs() < 1e-10, "Should return last point fraction");
+    }
+
+    #[test]
+    fn test_interpolate_fraction_consistency_with_pacing_profile() {
+        // Build a simple track, compute pacing profile, then verify interpolation
+        // at checkpoint distances matches the profile values exactly
+        let track = vec![
+            TrackPoint {
+                distance_km: 0.0,
+                elevation_m: 300.0,
+            },
+            TrackPoint {
+                distance_km: 10.0,
+                elevation_m: 400.0,
+            },
+            TrackPoint {
+                distance_km: 20.0,
+                elevation_m: 350.0,
+            },
+            TrackPoint {
+                distance_km: 30.0,
+                elevation_m: 300.0,
+            },
+        ];
+        let profile = compute_pacing_profile(&track, 500);
+
+        // Verify interpolation at exact track point distances returns exact values
+        for &(dist, frac) in &profile {
+            let interp = interpolate_fraction_from_profile(&profile, dist);
+            assert!(
+                (interp - frac).abs() < 1e-10,
+                "At distance {}: profile fraction {} vs interpolated {}",
+                dist,
+                frac,
+                interp
+            );
+        }
     }
 
     #[test]

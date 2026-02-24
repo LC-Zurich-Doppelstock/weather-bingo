@@ -35,6 +35,7 @@ describe("Sidebar", () => {
         onClearSelection={vi.fn()}
         onCheckpointHover={vi.fn()}
         onCheckpointTimesChange={vi.fn()}
+        onPacingProfileChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -54,6 +55,7 @@ describe("Sidebar", () => {
         onClearSelection={vi.fn()}
         onCheckpointHover={vi.fn()}
         onCheckpointTimesChange={vi.fn()}
+        onPacingProfileChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -73,6 +75,7 @@ describe("Sidebar", () => {
         onClearSelection={vi.fn()}
         onCheckpointHover={vi.fn()}
         onCheckpointTimesChange={vi.fn()}
+        onPacingProfileChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -96,6 +99,7 @@ describe("Sidebar", () => {
         onClearSelection={onClearSelection}
         onCheckpointHover={vi.fn()}
         onCheckpointTimesChange={vi.fn()}
+        onPacingProfileChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -116,6 +120,7 @@ describe("Sidebar", () => {
         onClearSelection={vi.fn()}
         onCheckpointHover={vi.fn()}
         onCheckpointTimesChange={vi.fn()}
+        onPacingProfileChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -144,6 +149,7 @@ describe("Sidebar", () => {
         onClearSelection={vi.fn()}
         onCheckpointHover={vi.fn()}
         onCheckpointTimesChange={vi.fn()}
+        onPacingProfileChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -174,6 +180,7 @@ describe("Sidebar", () => {
         onClearSelection={vi.fn()}
         onCheckpointHover={vi.fn()}
         onCheckpointTimesChange={vi.fn()}
+        onPacingProfileChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -206,6 +213,7 @@ describe("Sidebar", () => {
         onClearSelection={vi.fn()}
         onCheckpointHover={vi.fn()}
         onCheckpointTimesChange={vi.fn()}
+        onPacingProfileChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );
@@ -229,6 +237,7 @@ describe("Sidebar", () => {
         onClearSelection={vi.fn()}
         onCheckpointHover={vi.fn()}
         onCheckpointTimesChange={onCheckpointTimesChange}
+        onPacingProfileChange={vi.fn()}
       />,
       { wrapper: createWrapper() }
     );

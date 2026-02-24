@@ -183,4 +183,93 @@ describe("ElevationProfile", () => {
     );
     expect(screen.getByTestId("area-chart")).toBeInTheDocument();
   });
+
+  it("accepts pacingProfile prop and renders without errors", () => {
+    const profile = [
+      { distance_km: 0, time: "2026-03-01T07:00:00Z" },
+      { distance_km: 6, time: "2026-03-01T08:00:00Z" },
+      { distance_km: 12, time: "2026-03-01T09:08:00Z" },
+    ];
+    render(
+      <ElevationProfile
+        course={mockCourse}
+        checkpoints={mockCheckpoints}
+        hoveredCheckpointId={null}
+        selectedCheckpointId={null}
+        pacingProfile={profile}
+        onCheckpointHover={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("area-chart")).toBeInTheDocument();
+  });
+
+  it("renders with pacingProfile=null (fallback to checkpoint proximity)", () => {
+    const times = new Map<string, string>([
+      ["cp-1", "2026-03-01T07:00:00Z"],
+      ["cp-2", "2026-03-01T09:08:00Z"],
+    ]);
+    render(
+      <ElevationProfile
+        course={mockCourse}
+        checkpoints={mockCheckpoints}
+        hoveredCheckpointId={null}
+        selectedCheckpointId={null}
+        checkpointTimes={times}
+        pacingProfile={null}
+        onCheckpointHover={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("area-chart")).toBeInTheDocument();
+  });
+
+  it("renders with empty pacingProfile (fallback to checkpoint proximity)", () => {
+    render(
+      <ElevationProfile
+        course={mockCourse}
+        checkpoints={mockCheckpoints}
+        hoveredCheckpointId={null}
+        selectedCheckpointId={null}
+        pacingProfile={[]}
+        onCheckpointHover={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("area-chart")).toBeInTheDocument();
+  });
+
+  it("renders with single-point pacingProfile (fallback to checkpoint proximity)", () => {
+    render(
+      <ElevationProfile
+        course={mockCourse}
+        checkpoints={mockCheckpoints}
+        hoveredCheckpointId={null}
+        selectedCheckpointId={null}
+        pacingProfile={[{ distance_km: 0, time: "2026-03-01T07:00:00Z" }]}
+        onCheckpointHover={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("area-chart")).toBeInTheDocument();
+  });
+
+  it("renders with both pacingProfile and checkpointTimes (profile takes priority)", () => {
+    const profile = [
+      { distance_km: 0, time: "2026-03-01T07:00:00Z" },
+      { distance_km: 12, time: "2026-03-01T09:08:00Z" },
+    ];
+    const times = new Map<string, string>([
+      ["cp-1", "2026-03-01T07:00:00Z"],
+      ["cp-2", "2026-03-01T09:08:00Z"],
+    ]);
+    render(
+      <ElevationProfile
+        course={mockCourse}
+        checkpoints={mockCheckpoints}
+        hoveredCheckpointId={null}
+        selectedCheckpointId={null}
+        checkpointTimes={times}
+        pacingProfile={profile}
+        onCheckpointHover={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("area-chart")).toBeInTheDocument();
+  });
 });

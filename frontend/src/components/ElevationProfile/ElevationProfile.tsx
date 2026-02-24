@@ -31,6 +31,12 @@ const ChevronIcon = ({ collapsed }: { collapsed: boolean }) => (
   </svg>
 );
 
+/** A pre-computed pacing profile point: distance → ISO time string. */
+export interface PacingTimePoint {
+  distance_km: number;
+  time: string;
+}
+
 interface ElevationProfileProps {
   /** Full GPS course track. */
   course: CoursePoint[] | null;
@@ -42,6 +48,8 @@ interface ElevationProfileProps {
   selectedCheckpointId: string | null;
   /** Map of checkpoint_id → expected pass-through time (ISO 8601). */
   checkpointTimes?: Map<string, string>;
+  /** Pre-computed pacing profile: distance → ISO time (for continuous tooltip). */
+  pacingProfile?: PacingTimePoint[] | null;
   /** Callback when a checkpoint is hovered via the elevation chart. */
   onCheckpointHover: (id: string | null) => void;
 }
@@ -59,6 +67,7 @@ const ElevationProfile = memo(function ElevationProfile({
   hoveredCheckpointId,
   selectedCheckpointId,
   checkpointTimes,
+  pacingProfile,
   onCheckpointHover,
 }: ElevationProfileProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -108,12 +117,52 @@ const ElevationProfile = memo(function ElevationProfile({
   }, [checkpoints]);
 
   /**
-   * Find the nearest checkpoint to a given distance, if within a threshold.
-   * Returns the checkpoint's expected time string, or null.
-   * Threshold: 5% of total course distance or 2 km, whichever is larger.
+   * Look up the expected pass-through time at a given distance along the course.
+   *
+   * When a pacing profile is available (from the server), uses binary-search
+   * interpolation for continuous time display at any point. Falls back to
+   * checkpoint-proximity matching when no pacing profile is available.
    */
   const getTimeAtDistance = useCallback(
     (distanceKm: number): string | null => {
+      // Strategy 1: Continuous interpolation from pacing profile
+      if (pacingProfile && pacingProfile.length >= 2) {
+        // Before the profile starts
+        if (distanceKm <= pacingProfile[0]!.distance_km) {
+          return pacingProfile[0]!.time;
+        }
+        // After the profile ends
+        const last = pacingProfile[pacingProfile.length - 1]!;
+        if (distanceKm >= last.distance_km) {
+          return last.time;
+        }
+
+        // Binary search for the bracketing interval
+        let lo = 0;
+        let hi = pacingProfile.length - 1;
+        while (lo < hi - 1) {
+          const mid = (lo + hi) >>> 1;
+          if (pacingProfile[mid]!.distance_km <= distanceKm) {
+            lo = mid;
+          } else {
+            hi = mid;
+          }
+        }
+
+        const before = pacingProfile[lo]!;
+        const after = pacingProfile[hi]!;
+        const range = after.distance_km - before.distance_km;
+        if (range <= 0) return before.time;
+
+        // Linear interpolation between the two bracketing time strings
+        const t = (distanceKm - before.distance_km) / range;
+        const beforeMs = new Date(before.time).getTime();
+        const afterMs = new Date(after.time).getTime();
+        const interpolatedMs = beforeMs + t * (afterMs - beforeMs);
+        return new Date(interpolatedMs).toISOString();
+      }
+
+      // Strategy 2: Fallback — nearest checkpoint within threshold
       if (!checkpointTimes || checkpointTimes.size === 0 || checkpoints.length === 0) return null;
       const totalDistance = checkpoints[checkpoints.length - 1]!.distance_km || 1;
       const threshold = Math.max(totalDistance * 0.05, 2);
@@ -131,7 +180,7 @@ const ElevationProfile = memo(function ElevationProfile({
       }
       return null;
     },
-    [checkpoints, checkpointTimes, checkpointIdByDistance],
+    [pacingProfile, checkpoints, checkpointTimes, checkpointIdByDistance],
   );
 
   // When hovering on the chart, find the nearest checkpoint and notify parent
