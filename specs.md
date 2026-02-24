@@ -517,8 +517,11 @@ When a checkpoint is selected, the sidebar displays:
 │        09   10  [10:24] 11  12  │
 ├─────────────────────────────────┤
 │  📊 Forecast History            │
-│  "Show how this forecast has    │
-│   changed over time" [button]   │
+│  Collapsible. Four charts:      │
+│  temp, precip, wind,            │
+│  humidity & cloud cover.        │
+│  Shows how predictions evolved  │
+│  across yr.no model runs.       │
 └─────────────────────────────────┘
 ```
 
@@ -548,6 +551,13 @@ When the full course is selected:
 │  Wind Speed (m/s)                │
 │  ┌──────────────────────────┐    │
 │  │  ───╱──╲───╱──────       │    │
+│  └──────────────────────────┘    │
+│  0km    20    40    60    90km    │
+│                                  │
+│  Humidity & Cloud Cover (%)      │
+│  ┌──────────────────────────┐    │
+│  │  ───────╲___╱────────    │    │
+│  │  ╱──╲___╱       ╲───    │    │
 │  └──────────────────────────┘    │
 │  0km    20    40    60    90km    │
 │                                  │
@@ -1095,7 +1105,7 @@ Returns the parsed course GPS track as an array of coordinate points (extracted 
 
 > **Note:** The race-level `yr_model_run_at` is the **oldest** (minimum) model run time across all checkpoints that have available forecasts, providing a conservative indicator of forecast freshness. The UI displays this as "Model run: {time}" in the course overview. For single-checkpoint views, `yr_model_run_at` comes directly from the individual forecast row. When all checkpoints are beyond the forecast horizon, `yr_model_run_at` is `null`.
 
-> **Note:** The race endpoint returns a **simplified** weather object — detail-only fields (wind_gust_ms, humidity_pct, dew_point_c, cloud_cover_pct, uv_index) are omitted via `#[serde(skip_serializing_if = "Option::is_none")]`. Both endpoints use the same unified `Weather` struct; the race endpoint simply sets detail fields to `None` so they are excluded from the JSON. Precipitation uncertainty (precipitation_min/max_mm) is included in the race endpoint to support min/max range display in CourseOverview tooltips.
+> **Note:** The race endpoint returns a **simplified** weather object — detail-only fields (wind_gust_ms, dew_point_c, uv_index) are omitted via `#[serde(skip_serializing_if = "Option::is_none")]`. Both endpoints use the same unified `Weather` struct; the race endpoint simply sets detail fields to `None` so they are excluded from the JSON. Precipitation uncertainty (precipitation_min/max_mm), humidity_pct, and cloud_cover_pct are included in the race endpoint to support CourseOverview charts.
 
 ---
 
@@ -1192,3 +1202,4 @@ Distributes total race time across segments proportionally to effort cost, which
 | 8  | p10/p90 uncertainty bands in CourseOverview charts and race forecast API | Done |
 | 9  | Railway cloud deployment: multi-stage frontend Dockerfile, nginx reverse proxy, repo-root API build context | Done |
 | 10 | Background forecast poller: Expires-driven schedule, retry logic, distance-based time bands, status endpoint | Done |
+| 11 | Humidity & Cloud Cover charts in CourseOverview and ForecastHistory; race endpoint now includes humidity_pct and cloud_cover_pct | Done |

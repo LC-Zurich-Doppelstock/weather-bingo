@@ -38,7 +38,7 @@ describe("CourseOverview", () => {
     );
     expect(screen.getByText("Weather Along the Course")).toBeInTheDocument();
     expect(container.querySelector("[aria-busy='true']")).toBeInTheDocument();
-    expect(container.querySelectorAll(".animate-pulse")).toHaveLength(3);
+    expect(container.querySelectorAll(".animate-pulse")).toHaveLength(4);
   });
 
   it("renders forecast-unavailable message when all checkpoints have no weather", () => {
@@ -85,10 +85,11 @@ describe("CourseOverview", () => {
     expect(screen.getByText("Weather Along the Course")).toBeInTheDocument();
     expect(screen.getByText(/Vasaloppet/)).toBeInTheDocument();
     expect(screen.getByText(/8h target/)).toBeInTheDocument();
-    // Three chart sections
+    // Four chart sections
     expect(screen.getByRole("img", { name: "Temperature chart" })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Precipitation chart" })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Wind Speed chart" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Humidity & Cloud Cover chart" })).toBeInTheDocument();
   });
 
   it("renders partial data warning when some checkpoints have unavailable forecasts", () => {

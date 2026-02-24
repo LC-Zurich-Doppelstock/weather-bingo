@@ -137,8 +137,9 @@ impl Weather {
         }
     }
 
-    /// Simplified weather for race overview (omits detail-only fields).
-    /// Detail-only fields are `None` and will be omitted from JSON.
+    /// Simplified weather for race overview.
+    /// Most detail-only fields are `None` and omitted from JSON.
+    /// Humidity and cloud cover are included for the course overview chart.
     pub fn simplified(f: &models::Forecast) -> Self {
         Self {
             temperature_c: dec_to_f64(f.temperature_c),
@@ -155,9 +156,9 @@ impl Weather {
             precipitation_min_mm: opt_dec_to_f64(f.precipitation_min_mm),
             precipitation_max_mm: opt_dec_to_f64(f.precipitation_max_mm),
             precipitation_type: f.precipitation_type.clone(),
-            humidity_pct: None,
+            humidity_pct: Some(dec_to_f64(f.humidity_pct)),
             dew_point_c: None,
-            cloud_cover_pct: None,
+            cloud_cover_pct: Some(dec_to_f64(f.cloud_cover_pct)),
             uv_index: None,
             symbol_code: f.symbol_code.clone(),
         }
