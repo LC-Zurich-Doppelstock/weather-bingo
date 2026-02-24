@@ -8,7 +8,8 @@ use uuid::Uuid;
 use crate::db::{models, queries};
 use crate::errors::{AppError, ErrorResponse};
 use crate::helpers::dec_to_f64;
-use crate::services::gpx::CoursePoint;
+use crate::services::forecast::compute_pacing_profile;
+use crate::services::gpx::{compute_track_profile, extract_track_points, CoursePoint};
 
 /// Response type for GET /api/v1/races (list, without GPX).
 #[derive(Debug, Serialize, ToSchema)]
@@ -85,7 +86,8 @@ pub async fn list_races(State(pool): State<PgPool>) -> Result<Json<Vec<RaceListI
     Ok(Json(items))
 }
 
-/// Get race course as pre-parsed JSON coordinates.
+/// Get race course as pre-parsed JSON coordinates, with cumulative distances
+/// and pacing time fractions.
 #[utoipa::path(
     get,
     path = "/api/v1/races/{id}/course",
@@ -94,7 +96,7 @@ pub async fn list_races(State(pool): State<PgPool>) -> Result<Json<Vec<RaceListI
         ("id" = Uuid, Path, description = "Race UUID"),
     ),
     responses(
-        (status = 200, description = "Course coordinates as [lat, lon, ele] points", body = Vec<CoursePoint>),
+        (status = 200, description = "Course coordinates with cumulative distances and time fractions", body = Vec<CoursePoint>),
         (status = 404, description = "Race not found", body = ErrorResponse),
     )
 )]
@@ -107,11 +109,19 @@ pub async fn get_race_course(
         .ok_or_else(|| AppError::NotFound(format!("Race {} not found", id)))?;
 
     // GPX parsing is CPU-bound — run on the blocking thread pool
-    let points =
-        tokio::task::spawn_blocking(move || crate::services::gpx::extract_track_points(&gpx))
-            .await
-            .map_err(|e| AppError::InternalError(format!("GPX parsing task failed: {}", e)))?
-            .map_err(|e| AppError::InternalError(format!("Failed to parse course GPX: {}", e)))?;
+    let mut points = tokio::task::spawn_blocking(move || extract_track_points(&gpx))
+        .await
+        .map_err(|e| AppError::InternalError(format!("GPX parsing task failed: {}", e)))?
+        .map_err(|e| AppError::InternalError(format!("Failed to parse course GPX: {}", e)))?;
+
+    // Always compute pacing time fractions (elevation-based, duration-independent)
+    let track = compute_track_profile(&points);
+    if track.len() >= 2 {
+        let profile = compute_pacing_profile(&track, points.len());
+        for (pt, (_d, frac)) in points.iter_mut().zip(profile.into_iter()) {
+            pt.time_fraction = frac;
+        }
+    }
 
     Ok(Json(points))
 }

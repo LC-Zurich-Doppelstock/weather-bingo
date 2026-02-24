@@ -20,11 +20,11 @@ vi.mock("recharts", () => ({
 }));
 
 const mockCourse: CoursePoint[] = [
-  { lat: 61.16, lon: 13.27, ele: 400 },
-  { lat: 61.15, lon: 13.30, ele: 420 },
-  { lat: 61.14, lon: 13.35, ele: 380 },
-  { lat: 61.12, lon: 13.40, ele: 520 },
-  { lat: 61.10, lon: 13.50, ele: 450 },
+  { lat: 61.16, lon: 13.27, ele: 400, distance_km: 0, time_fraction: 0 },
+  { lat: 61.15, lon: 13.30, ele: 420, distance_km: 2.1, time_fraction: 0.15 },
+  { lat: 61.14, lon: 13.35, ele: 380, distance_km: 5.3, time_fraction: 0.37 },
+  { lat: 61.12, lon: 13.40, ele: 520, distance_km: 8.7, time_fraction: 0.62 },
+  { lat: 61.10, lon: 13.50, ele: 450, distance_km: 14.2, time_fraction: 1 },
 ];
 
 // ElevationProfile uses slightly different checkpoint data (different names/values),

@@ -27,10 +27,8 @@ function App() {
   const [checkpointTimes, setCheckpointTimes] = useState<Map<string, string>>(
     () => new Map()
   );
-  const [pacingProfile, setPacingProfile] = useState<Array<{ distance_km: number; time: string }> | null>(null);
 
   const { data: races } = useRaces();
-  const { data: course } = useCourse(selectedRaceId);
   const { data: checkpoints } = useCheckpoints(selectedRaceId);
 
   // Derive selected race from the races list (no separate detail endpoint)
@@ -71,6 +69,20 @@ function App() {
   // The slider still moves instantly (controlled by clampedDuration), but API fetches wait
   // for 300ms of inactivity.
   const debouncedDuration = useDebouncedValue(clampedDuration, 300);
+
+  // Fetch course with pacing time fractions (always present, duration-independent)
+  const { data: course } = useCourse(selectedRaceId);
+
+  // Compute pacing time profile from course points (fraction → ISO time)
+  const pacingProfile = useMemo(() => {
+    if (!course || course.length === 0 || !race?.start_time) return null;
+    const startMs = new Date(race.start_time).getTime();
+    const durationMs = debouncedDuration * 3600 * 1000;
+    return course.map((p) => ({
+      distance_km: p.distance_km,
+      time: new Date(startMs + p.time_fraction * durationMs).toISOString(),
+    }));
+  }, [course, race?.start_time, debouncedDuration]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedCheckpointId(null);
@@ -130,7 +142,6 @@ function App() {
             onClearSelection={handleClearSelection}
             onCheckpointHover={setHoveredCheckpointId}
             onCheckpointTimesChange={setCheckpointTimes}
-            onPacingProfileChange={setPacingProfile}
           />
         </aside>
       </main>

@@ -29,26 +29,19 @@ export interface ElevationPoint {
 }
 
 /**
- * Compute cumulative distance along a GPS track and pair with elevation.
- * Returns an array suitable for charting: { distance_km, ele } per point.
+ * Compute elevation profile from course points.
  *
- * Distance is computed via Haversine between consecutive points.
- * The first point always has distance_km = 0.
+ * Uses the server-provided `distance_km` on each CoursePoint (cumulative
+ * Haversine distance computed by the API). Returns an array suitable for
+ * charting: `{ distance_km, ele }` per point.
  */
 export function computeElevationProfile(
   points: CoursePoint[],
 ): ElevationPoint[] {
   if (points.length === 0) return [];
 
-  const result: ElevationPoint[] = [{ distance_km: 0, ele: points[0]!.ele }];
-  let cumulative = 0;
-
-  for (let i = 1; i < points.length; i++) {
-    const prev = points[i - 1]!;
-    const curr = points[i]!;
-    cumulative += haversineDistance(prev.lat, prev.lon, curr.lat, curr.lon);
-    result.push({ distance_km: cumulative, ele: curr.ele });
-  }
-
-  return result;
+  return points.map((p) => ({
+    distance_km: p.distance_km,
+    ele: p.ele,
+  }));
 }

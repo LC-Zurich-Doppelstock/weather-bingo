@@ -21,8 +21,6 @@ interface SidebarProps {
   onCheckpointHover: (id: string | null) => void;
   /** Callback to lift checkpoint→expected_time map to parent. */
   onCheckpointTimesChange: (times: Map<string, string>) => void;
-  /** Callback to lift pacing profile (distance→ISO time) to parent for elevation chart. */
-  onPacingProfileChange: (profile: Array<{ distance_km: number; time: string }> | null) => void;
 }
 
 /** Sticky back-navigation button at the top of the detail view. */
@@ -82,7 +80,6 @@ export default function Sidebar({
   onClearSelection,
   onCheckpointHover,
   onCheckpointTimesChange,
-  onPacingProfileChange,
 }: SidebarProps) {
   const selectedCheckpoint =
     checkpoints.find((cp) => cp.id === selectedCheckpointId) ?? null;
@@ -111,23 +108,6 @@ export default function Sidebar({
   useEffect(() => {
     onCheckpointTimesChange(checkpointTimesMap);
   }, [checkpointTimesMap, onCheckpointTimesChange]);
-
-  // Pre-compute pacing profile as distance→ISO time for the elevation chart tooltip.
-  // Converts (distance_km, time_fraction) pairs to (distance_km, ISO 8601 time string)
-  // using: time = start_time + fraction * target_duration_hours * 3600s
-  const pacingTimeProfile = useMemo(() => {
-    if (!raceForecast?.pacing_profile || !race?.start_time) return null;
-    const startMs = new Date(race.start_time).getTime();
-    const durationMs = targetDurationHours * 3600 * 1000;
-    return raceForecast.pacing_profile.map((p) => ({
-      distance_km: p.distance_km,
-      time: new Date(startMs + p.time_fraction * durationMs).toISOString(),
-    }));
-  }, [raceForecast?.pacing_profile, race?.start_time, targetDurationHours]);
-
-  useEffect(() => {
-    onPacingProfileChange(pacingTimeProfile);
-  }, [pacingTimeProfile, onPacingProfileChange]);
 
   // Look up expected_time from the race forecast response (server-computed pacing)
   const passTime = useMemo(() => {

@@ -13,6 +13,11 @@ export interface CoursePoint {
   lat: number;
   lon: number;
   ele: number;
+  /** Cumulative distance from start in kilometres (always populated). */
+  distance_km: number;
+  /** Cumulative time fraction (0.0 at start, 1.0 at finish).
+   *  Based on elevation-adjusted pacing model (duration-independent). */
+  time_fraction: number;
 }
 
 export interface Checkpoint {
@@ -87,18 +92,6 @@ export interface RaceForecastResponse {
   yr_model_run_at: string | null; // ISO 8601
   forecast_horizon: string | null; // ISO 8601 — min horizon across all checkpoints
   checkpoints: RaceForecastCheckpoint[];
-  /** Per-track-point pacing profile for elevation chart tooltip.
-   *  Each entry maps distance (km) to cumulative time fraction (0.0–1.0).
-   *  Absent when no GPX track is available. */
-  pacing_profile?: PacingProfilePoint[];
-}
-
-/** A single point in the pacing profile (distance → time fraction). */
-export interface PacingProfilePoint {
-  /** Distance from race start in km. */
-  distance_km: number;
-  /** Cumulative time fraction (0.0 at start, 1.0 at finish). */
-  time_fraction: number;
 }
 
 /* ------------------------------------------------------------------ */

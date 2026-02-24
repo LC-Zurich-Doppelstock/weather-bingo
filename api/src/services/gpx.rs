@@ -426,6 +426,11 @@ pub struct CoursePoint {
     pub lon: f64,
     /// Elevation in metres above sea level
     pub ele: f64,
+    /// Cumulative distance from start in kilometres (always populated)
+    pub distance_km: f64,
+    /// Cumulative time fraction (0.0 at start, 1.0 at finish).
+    /// Based on elevation-adjusted pacing model (duration-independent).
+    pub time_fraction: f64,
 }
 
 /// Extract track points from GPX XML as `[{lat, lon, ele}]` coordinates.
@@ -505,6 +510,8 @@ pub fn extract_track_points(gpx_xml: &str) -> Result<Vec<CoursePoint>, GpxError>
                             lat: trkpt_lat,
                             lon: trkpt_lon,
                             ele: trkpt_ele.unwrap_or(0.0),
+                            distance_km: 0.0,   // filled in below
+                            time_fraction: 0.0, // filled in by races.rs handler
                         });
                         in_trkpt = false;
                     }
@@ -516,6 +523,16 @@ pub fn extract_track_points(gpx_xml: &str) -> Result<Vec<CoursePoint>, GpxError>
             _ => {}
         }
         buf.clear();
+    }
+
+    // Compute cumulative Haversine distances
+    if points.len() > 1 {
+        let mut cumulative = 0.0;
+        for i in 1..points.len() {
+            let prev = &points[i - 1];
+            cumulative += haversine_distance_km(prev.lat, prev.lon, points[i].lat, points[i].lon);
+            points[i].distance_km = cumulative;
+        }
     }
 
     Ok(points)
@@ -837,6 +854,8 @@ mod tests {
             lat: 61.0,
             lon: 14.0,
             ele: 350.0,
+            distance_km: 0.0,
+            time_fraction: 0.0,
         }];
         let profile = compute_track_profile(&points);
         assert_eq!(profile.len(), 1);
@@ -851,16 +870,22 @@ mod tests {
                 lat: 61.0,
                 lon: 14.0,
                 ele: 100.0,
+                distance_km: 0.0,
+                time_fraction: 0.0,
             },
             CoursePoint {
                 lat: 61.01,
                 lon: 14.0,
                 ele: 150.0,
+                distance_km: 0.0,
+                time_fraction: 0.0,
             },
             CoursePoint {
                 lat: 61.02,
                 lon: 14.0,
                 ele: 200.0,
+                distance_km: 0.0,
+                time_fraction: 0.0,
             },
         ];
         let profile = compute_track_profile(&points);

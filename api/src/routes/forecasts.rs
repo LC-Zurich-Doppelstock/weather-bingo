@@ -242,18 +242,6 @@ pub struct RaceForecastCheckpoint {
     pub weather: Option<Weather>,
 }
 
-/// A single point in the pacing profile, mapping distance to time fraction.
-///
-/// Used by the elevation profile chart to show interpolated expected
-/// pass-through times at every point along the course, not just at checkpoints.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct PacingProfilePoint {
-    /// Distance from race start in km
-    pub distance_km: f64,
-    /// Cumulative time fraction (0.0 at start, 1.0 at finish)
-    pub time_fraction: f64,
-}
-
 /// Full race forecast response with weather at all checkpoints (Section 9.6).
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RaceForecastResponse {
@@ -272,11 +260,6 @@ pub struct RaceForecastResponse {
     pub forecast_horizon: Option<String>,
     /// Weather forecasts at each checkpoint
     pub checkpoints: Vec<RaceForecastCheckpoint>,
-    /// Per-track-point pacing profile for the elevation chart tooltip.
-    /// Each entry maps a distance (km) to a cumulative time fraction (0.0–1.0).
-    /// Absent when no GPX track is available for the race.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pacing_profile: Option<Vec<PacingProfilePoint>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -480,50 +463,39 @@ pub async fn get_race_forecast(
 
     // Load GPX track for track-aware pacing (uses full elevation profile
     // instead of net elevation between checkpoints)
-    let (time_fractions, pacing_profile) =
-        match queries::get_race_course_gpx(&state.pool, race_id).await? {
-            Some(gpx_xml) => match extract_track_points(&gpx_xml) {
-                Ok(course_points) => {
-                    let track = compute_track_profile(&course_points);
-                    tracing::debug!(
-                        "Track-aware pacing: {} track points for race {}",
-                        track.len(),
-                        race_id
-                    );
+    let time_fractions = match queries::get_race_course_gpx(&state.pool, race_id).await? {
+        Some(gpx_xml) => match extract_track_points(&gpx_xml) {
+            Ok(course_points) => {
+                let track = compute_track_profile(&course_points);
+                tracing::debug!(
+                    "Track-aware pacing: {} track points for race {}",
+                    track.len(),
+                    race_id
+                );
 
-                    // Compute per-track-point pacing profile (capped at 500 points)
-                    let profile_raw = compute_pacing_profile(&track, 500);
+                // Compute per-track-point pacing profile then derive checkpoint fractions
+                let profile_raw = compute_pacing_profile(&track, 500);
 
-                    // Derive checkpoint fractions from the same profile (single source of truth)
-                    let fractions: Vec<f64> = pacing_inputs
-                        .iter()
-                        .map(|cp| interpolate_fraction_from_profile(&profile_raw, cp.distance_km))
-                        .collect();
-
-                    let profile: Vec<PacingProfilePoint> = profile_raw
-                        .into_iter()
-                        .map(|(d, f)| PacingProfilePoint {
-                            distance_km: d,
-                            time_fraction: f,
-                        })
-                        .collect();
-
-                    (fractions, Some(profile))
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to parse GPX track for race {}, falling back to simple pacing: {}",
-                        race_id,
-                        e
-                    );
-                    (calculate_pass_time_fractions(&pacing_inputs), None)
-                }
-            },
-            None => {
-                tracing::debug!("No GPX track for race {}, using simple pacing", race_id);
-                (calculate_pass_time_fractions(&pacing_inputs), None)
+                // Derive checkpoint fractions from the profile (single source of truth)
+                pacing_inputs
+                    .iter()
+                    .map(|cp| interpolate_fraction_from_profile(&profile_raw, cp.distance_km))
+                    .collect()
             }
-        };
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to parse GPX track for race {}, falling back to simple pacing: {}",
+                    race_id,
+                    e
+                );
+                calculate_pass_time_fractions(&pacing_inputs)
+            }
+        },
+        None => {
+            tracing::debug!("No GPX track for race {}, using simple pacing", race_id);
+            calculate_pass_time_fractions(&pacing_inputs)
+        }
+    };
 
     // Build checkpoint + expected time pairs using elevation-adjusted pacing
     let checkpoints_with_times: Vec<CheckpointWithTime> = checkpoints
@@ -594,7 +566,6 @@ pub async fn get_race_forecast(
             yr_model_run_at,
             forecast_horizon,
             checkpoints: checkpoint_forecasts,
-            pacing_profile,
         }),
     ))
 }
